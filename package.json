@@ -1,0 +1,17 @@
+{
+  "name": "clan-battle",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Битва кланов — детский браузерный 3D-шутер",
+  "workspaces": ["shared", "client", "server"],
+  "scripts": {
+    "dev": "npm run dev -w client",
+    "build": "npm run typecheck -w shared && npm run build -w client",
+    "preview": "npm run preview -w client",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.63.0",
+    "typescript": "~5.9.3"
+  }
+}

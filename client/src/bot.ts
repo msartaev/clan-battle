@@ -1,0 +1,311 @@
+import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, Vector3 } from "@babylonjs/core";
+import { RULES, WEAPONS, type ClanId, type WeaponId } from "@clan-battle/shared";
+import { Humanoid, randomLook } from "./humanoid";
+import { angleDiff, clamp } from "./utils";
+
+export type BotState = "wander" | "chase" | "search" | "dead";
+
+/** То, что бот знает о мире (даёт Game) */
+export interface BotContext {
+  now: number;
+  playerPos: Vector3;
+  playerAlive: boolean;
+  /** Видит ли бот игрока прямо сейчас (с учётом стен, кустов и скрытности) */
+  canSee(bot: Bot): boolean;
+  randomWalkPoint(near?: Vector3, radius?: number): Vector3;
+  shoot(bot: Bot, target: Vector3): void;
+  basePoint(clan: ClanId): { pos: Vector3; yaw: number };
+}
+
+let botCounter = 0;
+
+export class Bot {
+  readonly id: number;
+  readonly collider: Mesh;
+  readonly humanoid: Humanoid;
+  readonly weapon: WeaponId;
+  hp: number = RULES.maxHp;
+  state: BotState = "wander";
+  yaw = 0;
+  aimPitch = 0;
+  speed = 0;
+  private goal = new Vector3();
+  private lastSeen = new Vector3();
+  private seeCheckIn = 0;
+  private sees = false;
+  private reactionLeft = 0;
+  private shotCooldown = 0;
+  private burstLeft = 3;
+  private strafeDir = 1;
+  private strafeTimer = 0;
+  private searchTimer = 0;
+  private stuckTimer = 0;
+  private stuckPos = new Vector3();
+  private dodgeTimer = 0;
+  private dodgeDir = new Vector3();
+  private deadTimer = 0;
+  private hpBar: Mesh;
+  private hpBarBg: Mesh;
+  private hpBarShowUntil = 0;
+
+  constructor(scene: Scene, readonly clan: ClanId, weapon: WeaponId) {
+    this.id = ++botCounter;
+    this.weapon = weapon;
+    this.collider = MeshBuilder.CreateBox(`botCollider${this.id}`, { size: 0.5 }, scene);
+    this.collider.isVisible = false;
+    this.collider.isPickable = false;
+    this.collider.checkCollisions = true;
+    this.collider.ellipsoid = new Vector3(0.35, 0.9, 0.35);
+    this.collider.ellipsoidOffset = new Vector3(0, 0.9, 0);
+    this.humanoid = new Humanoid(scene, `bot${this.id}`, randomLook(clan));
+    this.humanoid.setWeapon(weapon);
+
+    // Полоска здоровья над головой (видна после попадания)
+    const bgMat = new StandardMaterial(`hpbg${this.id}`, scene);
+    bgMat.emissiveColor = new Color3(0.1, 0.1, 0.1);
+    bgMat.disableLighting = true;
+    const fgMat = new StandardMaterial(`hpfg${this.id}`, scene);
+    fgMat.emissiveColor = new Color3(1, 0.25, 0.2);
+    fgMat.disableLighting = true;
+    this.hpBarBg = MeshBuilder.CreatePlane(`hpBg${this.id}`, { width: 0.8, height: 0.1 }, scene);
+    this.hpBarBg.material = bgMat;
+    this.hpBarBg.billboardMode = Mesh.BILLBOARDMODE_ALL;
+    this.hpBarBg.isPickable = false;
+    this.hpBar = MeshBuilder.CreatePlane(`hpFg${this.id}`, { width: 0.76, height: 0.06 }, scene);
+    this.hpBar.material = fgMat;
+    this.hpBar.parent = this.hpBarBg;
+    this.hpBar.position.z = -0.01;
+    this.hpBar.isPickable = false;
+    this.hpBarBg.setEnabled(false);
+  }
+
+  get position(): Vector3 {
+    return this.collider.position;
+  }
+
+  get alive(): boolean {
+    return this.state !== "dead";
+  }
+
+  spawn(pos: Vector3, yaw: number): void {
+    this.collider.position.copyFrom(pos);
+    this.collider.position.y = 0;
+    this.collider.checkCollisions = true;
+    this.yaw = yaw;
+    this.hp = RULES.maxHp;
+    this.state = "wander";
+    this.goal.copyFrom(pos);
+    this.sees = false;
+    this.seeCheckIn = Math.random() * 0.2;
+    this.humanoid.deathT = 0;
+    this.humanoid.setEnabled(true);
+    this.hpBarBg.setEnabled(false);
+    this.stuckPos.copyFrom(pos);
+    this.stuckTimer = 0;
+    this.syncHumanoid(0);
+  }
+
+  /** Возвращает true, если бот погиб */
+  takeDamage(amount: number, from: Vector3, now: number): boolean {
+    if (!this.alive) return false;
+    this.hp = Math.max(0, this.hp - amount);
+    this.hpBarShowUntil = now + 4;
+    if (this.hp <= 0) {
+      this.state = "dead";
+      this.deadTimer = 0;
+      this.collider.checkCollisions = false;
+      this.hpBarBg.setEnabled(false);
+      return true;
+    }
+    // Получил урон — разворачивается к стрелку и ищет его
+    if (this.state !== "chase") {
+      this.state = "search";
+      this.lastSeen.copyFrom(from);
+      this.searchTimer = 6;
+    }
+    this.reactionLeft = Math.min(this.reactionLeft, 0.25);
+    return false;
+  }
+
+  /** Услышал выстрел */
+  hear(pos: Vector3): void {
+    if (this.state === "wander") {
+      this.state = "search";
+      this.lastSeen.copyFrom(pos);
+      this.searchTimer = 6;
+    }
+  }
+
+  get eyePos(): Vector3 {
+    return this.collider.position.add(new Vector3(0, 1.62, 0));
+  }
+
+  /** Направление взгляда (горизонтальное) */
+  get forward(): Vector3 {
+    return new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+  }
+
+  update(dt: number, ctx: BotContext): void {
+    if (this.state === "dead") {
+      this.deadTimer += dt;
+      this.humanoid.deathT = clamp(this.deadTimer / 0.5, 0, 1);
+      this.humanoid.animate(dt, 0, false, 0, false);
+      if (this.deadTimer > 2.2) this.humanoid.setEnabled(false);
+      if (this.deadTimer > RULES.botRespawnSec) {
+        const b = ctx.basePoint(this.clan);
+        this.spawn(b.pos, b.yaw);
+      }
+      return;
+    }
+
+    // Зрение — несколько раз в секунду, не каждый кадр
+    this.seeCheckIn -= dt;
+    if (this.seeCheckIn <= 0) {
+      this.seeCheckIn = 0.18 + Math.random() * 0.06;
+      const was = this.sees;
+      this.sees = ctx.playerAlive && ctx.canSee(this);
+      if (this.sees) {
+        if (!was) this.reactionLeft = 0.45 + Math.random() * 0.5;
+        this.state = "chase";
+        this.lastSeen.copyFrom(ctx.playerPos);
+      } else if (was && this.state === "chase") {
+        this.state = "search";
+        this.searchTimer = 7;
+      }
+    }
+    if (!ctx.playerAlive && this.state !== "wander") {
+      this.state = "wander";
+      this.sees = false;
+    }
+
+    let move = Vector3.Zero();
+    let moveSpeed = 0;
+    let faceTarget: Vector3 | null = null;
+    const pos = this.collider.position;
+
+    if (this.state === "wander") {
+      if (Vector3.DistanceSquared(pos, this.goal) < 2.5) {
+        // Чаще бродят в сторону игрока, чтобы было с кем сражаться
+        this.goal = Math.random() < 0.55 ? ctx.randomWalkPoint(ctx.playerPos, 28) : ctx.randomWalkPoint();
+      }
+      move = this.goal.subtract(pos);
+      moveSpeed = 2.6;
+      faceTarget = this.goal;
+    } else if (this.state === "search") {
+      this.searchTimer -= dt;
+      move = this.lastSeen.subtract(pos);
+      moveSpeed = 3.6;
+      faceTarget = this.lastSeen;
+      if (this.searchTimer <= 0 || move.lengthSquared() < 2) {
+        this.state = "wander";
+        this.goal = ctx.randomWalkPoint(pos, 20);
+      }
+    } else if (this.state === "chase") {
+      const toP = ctx.playerPos.subtract(pos);
+      toP.y = 0;
+      const dist = toP.length();
+      faceTarget = ctx.playerPos;
+      const dirP = toP.scale(1 / Math.max(dist, 0.001));
+      const side = new Vector3(dirP.z, 0, -dirP.x).scale(this.strafeDir);
+      this.strafeTimer -= dt;
+      if (this.strafeTimer <= 0) {
+        this.strafeTimer = 1 + Math.random() * 1.5;
+        this.strafeDir = Math.random() < 0.5 ? -1 : 1;
+      }
+      if (dist > 16 || !this.sees) {
+        move = dirP.add(side.scale(0.3));
+        moveSpeed = 4.2;
+      } else if (dist < 6) {
+        move = dirP.scale(-1).add(side.scale(0.5));
+        moveSpeed = 3;
+      } else {
+        move = side.add(dirP.scale(0.15));
+        moveSpeed = 2.4;
+      }
+
+      // Стрельба
+      if (this.sees) {
+        this.reactionLeft -= dt;
+        this.shotCooldown -= dt;
+        const facingErr = Math.abs(angleDiff(this.yaw, Math.atan2(toP.x, toP.z)));
+        if (this.reactionLeft <= 0 && this.shotCooldown <= 0 && facingErr < 0.35 && dist < WEAPONS[this.weapon].range) {
+          ctx.shoot(this, ctx.playerPos);
+          this.burstLeft -= 1;
+          const rate = this.weapon === "weakPistol" ? 3 : this.weapon === "strongPistol" ? 1.1 : 0.8;
+          this.shotCooldown = 1 / rate;
+          if (this.burstLeft <= 0) {
+            this.burstLeft = 2 + Math.floor(Math.random() * 3);
+            this.shotCooldown += 0.7 + Math.random() * 0.8;
+          }
+        }
+      }
+    }
+
+    // Объезд застреваний: если долго не сдвинулся — шаг в сторону
+    if (this.dodgeTimer > 0) {
+      this.dodgeTimer -= dt;
+      move = this.dodgeDir.clone();
+      moveSpeed = Math.max(moveSpeed, 2.6);
+    }
+    move.y = 0;
+    const len = move.length();
+    const before = pos.clone();
+    if (len > 0.05 && moveSpeed > 0) {
+      move.scaleInPlace((moveSpeed * dt) / len);
+      this.collider.moveWithCollisions(move);
+      pos.y = 0;
+    }
+    this.speed = Vector3.Distance(before, pos) / Math.max(dt, 1e-4);
+
+    this.stuckTimer += dt;
+    if (this.stuckTimer > 0.8) {
+      const movedSq = Vector3.DistanceSquared(this.stuckPos, pos);
+      if (moveSpeed > 0 && movedSq < 0.25 && this.dodgeTimer <= 0) {
+        // Застрял — отходим в случайную сторону и выбираем новую цель
+        const a = Math.random() * Math.PI * 2;
+        this.dodgeDir.set(Math.sin(a), 0, Math.cos(a));
+        this.dodgeTimer = 0.9;
+        if (this.state === "wander") this.goal = ctx.randomWalkPoint(pos, 25);
+        this.strafeDir *= -1;
+      }
+      this.stuckTimer = 0;
+      this.stuckPos.copyFrom(pos);
+    }
+
+    // Поворот к цели
+    if (faceTarget) {
+      const d = faceTarget.subtract(pos);
+      if (d.x * d.x + d.z * d.z > 0.01) {
+        const target = Math.atan2(d.x, d.z);
+        const turn = angleDiff(this.yaw, target);
+        const maxTurn = (this.state === "chase" ? 7 : 4) * dt;
+        this.yaw += clamp(turn, -maxTurn, maxTurn);
+      }
+      if (this.state === "chase") {
+        const hd = Math.hypot(d.x, d.z);
+        this.aimPitch = -Math.atan2(faceTarget.y + 1.1 - 1.5, hd);
+      } else {
+        this.aimPitch = 0.1;
+      }
+    }
+
+    // Полоска здоровья
+    const showBar = ctx.now < this.hpBarShowUntil && this.hp < RULES.maxHp;
+    this.hpBarBg.setEnabled(showBar);
+    if (showBar) {
+      this.hpBarBg.position.set(pos.x, pos.y + 2.15, pos.z);
+      const k = this.hp / RULES.maxHp;
+      this.hpBar.scaling.x = Math.max(0.001, k);
+      this.hpBar.position.x = -(0.76 * (1 - k)) / 2;
+    }
+
+    this.syncHumanoid(dt);
+  }
+
+  private syncHumanoid(dt: number): void {
+    const r = this.humanoid.root;
+    r.position.copyFrom(this.collider.position);
+    r.rotation.y = this.yaw;
+    this.humanoid.animate(dt, this.speed, false, this.aimPitch, false);
+  }
+}

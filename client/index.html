@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#1b2433" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Битва кланов</title>
+  </head>
+  <body>
+    <canvas id="game" touch-action="none"></canvas>
+
+    <!-- Стартовый экран -->
+    <section id="start" class="screen">
+      <div class="start-card">
+        <h1>Битва кланов</h1>
+        <p class="sub">Выбери свой клан</p>
+        <div class="clans">
+          <button class="clan dragons selected" data-clan="dragons">
+            <span class="emblem">
+              <svg viewBox="0 0 64 48" aria-hidden="true">
+                <path d="M32 8 L10 4 L20 18 L6 22 L32 42 L58 22 L44 18 L54 4 Z" fill="currentColor" />
+                <circle cx="32" cy="22" r="4" fill="#fff3c4" />
+              </svg>
+            </span>
+            <span class="name">Драконы</span>
+            <span class="desc">огонь дракона</span>
+          </button>
+          <button class="clan snakes" data-clan="snakes">
+            <span class="emblem">
+              <svg viewBox="0 0 64 48" aria-hidden="true">
+                <path
+                  d="M10 40 C 40 40, 22 24, 32 20 C 42 16, 52 18, 48 8"
+                  stroke="currentColor"
+                  stroke-width="6"
+                  fill="none"
+                  stroke-linecap="round"
+                />
+                <circle cx="49" cy="7" r="5" fill="currentColor" />
+              </svg>
+            </span>
+            <span class="name">Змеи</span>
+            <span class="desc">яд змеи</span>
+          </button>
+        </div>
+        <button id="play" class="big">Играть</button>
+        <p class="hint desktop-only">WASD — ходить, мышь — целиться, ЛКМ — стрелять, V — камера</p>
+        <p class="hint touch-only">Поверни телефон горизонтально</p>
+      </div>
+    </section>
+
+    <!-- Загрузка -->
+    <section id="loading" class="screen hidden"><div class="loading-text">Загрузка…</div></section>
+
+    <!-- Интерфейс в игре -->
+    <section id="hud" class="hidden">
+      <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+      <div id="hitmarker"></div>
+      <div id="vignette"></div>
+
+      <div class="hud-tl">
+        <div id="lives"></div>
+        <div id="clan-badge"></div>
+      </div>
+      <div class="hud-tr">
+        <div id="kills">Убито: <b>0</b></div>
+        <div id="fps"></div>
+      </div>
+
+      <div class="hud-bl">
+        <div class="hp-label">Здоровье <b id="hp-num">100</b></div>
+        <div class="hp-bar"><div id="hp-fill"></div></div>
+        <div id="status"></div>
+      </div>
+
+      <div class="hud-br">
+        <div id="weapon-name">Слабый пистолет</div>
+        <div id="ammo"><b>50</b> патронов</div>
+      </div>
+
+      <div id="slots">
+        <div class="slot" data-slot="0"><span>1</span>Слабый</div>
+        <div class="slot" data-slot="1"><span>2</span>Сильный</div>
+        <div class="slot" data-slot="2"><span>3</span>Клановое</div>
+      </div>
+
+      <div id="toast"></div>
+      <div id="hidden-badge">Тебя не видно</div>
+    </section>
+
+    <!-- Сенсорное управление -->
+    <section id="touch">
+      <div id="look-zone"></div>
+      <div id="joy-zone">
+        <div id="joy-base"><div id="joy-knob"></div></div>
+      </div>
+      <button id="btn-fire" class="tbtn fire">Огонь</button>
+      <button id="btn-jump" class="tbtn">Прыжок</button>
+      <button id="btn-crouch" class="tbtn">Присесть</button>
+      <button id="btn-sprint" class="tbtn">Бег</button>
+      <button id="btn-camera" class="tbtn small">Камера</button>
+      <button id="btn-weapon" class="tbtn small">Оружие</button>
+    </section>
+
+    <!-- Пауза (ПК) -->
+    <section id="pause" class="screen hidden">
+      <div class="start-card">
+        <h2>Пауза</h2>
+        <button id="resume" class="big">Продолжить</button>
+        <button id="to-menu-pause" class="link">Главное меню</button>
+      </div>
+    </section>
+
+    <!-- Смерть / конец игры -->
+    <section id="dead" class="screen hidden">
+      <div class="start-card">
+        <h2>Тебя выбили!</h2>
+        <p id="dead-text"></p>
+      </div>
+    </section>
+    <section id="over" class="screen hidden">
+      <div class="start-card">
+        <h2>Игра окончена</h2>
+        <p id="over-text"></p>
+        <button id="restart" class="big">Играть снова</button>
+        <button id="to-menu" class="link">Главное меню</button>
+      </div>
+    </section>
+
+    <div id="rotate" class="screen">
+      <div class="start-card"><h2>Поверни телефон</h2><p>Играть удобнее горизонтально</p></div>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

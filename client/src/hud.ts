@@ -1,0 +1,136 @@
+import { CLANS, RULES, WEAPON_ORDER, weaponDisplayName, type ClanId, type WeaponId } from "@clan-battle/shared";
+
+const $ = (id: string) => document.getElementById(id)!;
+
+const HEART_FULL =
+  '<svg viewBox="0 0 24 22"><path d="M12 21 L2.5 11.5 A5.5 5.5 0 0 1 12 4 A5.5 5.5 0 0 1 21.5 11.5 Z" fill="#ff3b4e" stroke="#fff" stroke-width="1.5"/></svg>';
+const HEART_EMPTY =
+  '<svg viewBox="0 0 24 22"><path d="M12 21 L2.5 11.5 A5.5 5.5 0 0 1 12 4 A5.5 5.5 0 0 1 21.5 11.5 Z" fill="rgba(0,0,0,0.35)" stroke="rgba(255,255,255,0.6)" stroke-width="1.5"/></svg>';
+
+/** Интерфейс поверх игры (обычный HTML — легче, чем 3D-интерфейс, и чётче на телефоне) */
+export class Hud {
+  private root = $("hud");
+  private hpNum = $("hp-num");
+  private hpFill = $("hp-fill");
+  private ammo = $("ammo");
+  private weaponName = $("weapon-name");
+  private kills = $("kills");
+  private lives = $("lives");
+  private fps = $("fps");
+  private toast = $("toast");
+  private hitmarker = $("hitmarker");
+  private vignette = $("vignette");
+  private status = $("status");
+  private hiddenBadge = $("hidden-badge");
+  private slots = Array.from(document.querySelectorAll<HTMLElement>("#slots .slot"));
+  private cache: Record<string, string | number | boolean> = {};
+  private toastTimer = 0;
+  private hitTimer = 0;
+  private vignetteTimer = 0;
+
+  constructor(private clan: ClanId) {
+    const c = CLANS[clan];
+    document.documentElement.style.setProperty("--clan", c.color);
+    document.documentElement.style.setProperty("--clan-accent", c.accent);
+    $("clan-badge").textContent = c.name;
+    this.slots.forEach((s, i) => {
+      const id = WEAPON_ORDER[i];
+      const short = id === "weakPistol" ? "Слабый" : id === "strongPistol" ? "Сильный" : c.weaponName;
+      s.innerHTML = `<span>${i + 1}</span>${short}`;
+    });
+  }
+
+  /** Обработчик нажатия на слот оружия (для телефона) */
+  onSlotTap(cb: (i: number) => void): void {
+    this.slots.forEach((s, i) => {
+      s.ontouchstart = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cb(i);
+      };
+    });
+  }
+
+  show(v: boolean): void {
+    this.root.classList.toggle("hidden", !v);
+  }
+
+  private set(key: string, v: string | number | boolean, apply: () => void): void {
+    if (this.cache[key] === v) return;
+    this.cache[key] = v;
+    apply();
+  }
+
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean }): void {
+    const hp = Math.ceil(s.hp);
+    this.set("hp", hp, () => {
+      this.hpNum.textContent = String(hp);
+      this.hpFill.style.width = `${(hp / RULES.maxHp) * 100}%`;
+      this.hpFill.classList.toggle("low", hp <= 30);
+    });
+    this.set("ammo", s.ammo, () => {
+      this.ammo.innerHTML = `<b>${s.ammo}</b> патронов`;
+      this.ammo.classList.toggle("empty", s.ammo <= 0);
+    });
+    this.set("weapon", s.weapon, () => {
+      this.weaponName.textContent = weaponDisplayName(s.weapon, this.clan);
+      const idx = WEAPON_ORDER.indexOf(s.weapon);
+      this.slots.forEach((el, i) => el.classList.toggle("active", i === idx));
+    });
+    this.set("kills", s.kills, () => {
+      this.kills.innerHTML = `Убито: <b>${s.kills}</b>`;
+    });
+    this.set("lives", s.lives, () => {
+      let h = "";
+      for (let i = 0; i < RULES.lives; i++) h += i < s.lives ? HEART_FULL : HEART_EMPTY;
+      this.lives.innerHTML = h;
+    });
+    this.set("fps", s.fps, () => {
+      this.fps.textContent = `${s.fps} FPS`;
+    });
+    this.set("status", s.status, () => {
+      this.status.textContent = s.status;
+    });
+    this.set("hidden", s.hidden, () => {
+      this.hiddenBadge.classList.toggle("show", s.hidden);
+    });
+
+    if (this.toastTimer > 0) {
+      this.toastTimer -= dt;
+      if (this.toastTimer <= 0) this.toast.classList.remove("show");
+    }
+    if (this.hitTimer > 0) {
+      this.hitTimer -= dt;
+      if (this.hitTimer <= 0) this.hitmarker.classList.remove("show", "kill");
+    }
+    if (this.vignetteTimer > 0) {
+      this.vignetteTimer -= dt;
+      if (this.vignetteTimer <= 0) this.vignette.classList.remove("show");
+    }
+  }
+
+  message(text: string, seconds = 1.6, color = "#ffffff"): void {
+    this.toast.textContent = text;
+    this.toast.style.color = color;
+    this.toast.classList.add("show");
+    this.toastTimer = seconds;
+  }
+
+  hit(kill: boolean): void {
+    this.hitmarker.classList.add("show");
+    this.hitmarker.classList.toggle("kill", kill);
+    this.hitTimer = kill ? 0.35 : 0.12;
+  }
+
+  damage(): void {
+    this.vignette.classList.add("show");
+    this.vignetteTimer = 0.18;
+  }
+
+  reset(): void {
+    this.cache = {};
+    this.toast.classList.remove("show");
+    this.hitmarker.classList.remove("show", "kill");
+    this.vignette.classList.remove("show");
+  }
+}
