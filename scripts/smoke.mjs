@@ -21,8 +21,11 @@ function watch(page, label) {
   page.on("pageerror", (e) => errors.push(`[${label}] pageerror: ${e.message}`));
 }
 
+// Полный Chromium, а не headless shell: в shell программный WebGL (SwiftShader)
+// на сборке сцены уходит в бесконечный рост памяти и вкладка падает.
 const browser = await chromium.launch({
   headless: true,
+  channel: "chromium",
   args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"],
 });
 
@@ -99,12 +102,23 @@ const browser = await chromium.launch({
     const killsBefore = g.kills;
     const hpBefore = b.hp;
     g.player.selectWeapon(1);
+    // На программном рендере кадры идут по 2–3 в секунду, поэтому ждём кадры, а не время:
+    // сначала камера должна переехать к телепортированному игроку, потом один выстрел
+    const frames = async (n) => {
+      const until = g.engine.frameId + n;
+      while (g.engine.frameId < until) await new Promise((r) => setTimeout(r, 50));
+    };
+    await frames(3);
+    b.spawn(new V(0, 0, -17), Math.PI);
     g.input.mouseFire = true;
-    await new Promise((r) => setTimeout(r, 2600));
+    const t0 = Date.now();
+    while (g.player.ammo === 50 && Date.now() - t0 < 20000) await new Promise((r) => setTimeout(r, 50));
     g.input.mouseFire = false;
+    await frames(2);
     return { killsBefore, killsAfter: g.kills, botHpBefore: hpBefore, botHpAfter: b.hp, botState: b.state, ammoLeft: g.player.ammo };
   });
   console.log("shoot test:", shootResult);
+  if (shootResult.botHpAfter >= shootResult.botHpBefore) errors.push("[desktop] shoot test: выстрел в упор не ранил бота");
 
   // Проверка ботов: стоим на открытом месте — боты должны найти и ранить игрока
   const botTest = await page.evaluate(async () => {
