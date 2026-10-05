@@ -28,6 +28,7 @@ import { Bot, type BotContext } from "./bot";
 import { Effects, Sfx } from "./effects";
 import { Hud } from "./hud";
 import { flatMat } from "./humanoid";
+import { getModels, gunKey, loadModels } from "./models";
 import type { Input } from "./input";
 import { Player } from "./player";
 import { applySpread, clamp, dirFromYawPitch, makeRng, rayVsVerticalSegment } from "./utils";
@@ -61,12 +62,12 @@ export class Game {
   readonly engine: Engine;
   readonly scene: Scene;
   readonly camera: FreeCamera;
-  readonly world: World;
-  readonly player: Player;
+  world!: World;
+  player!: Player;
   readonly bots: Bot[] = [];
-  readonly effects: Effects;
+  effects!: Effects;
   readonly sfx = new Sfx();
-  readonly hud: Hud;
+  hud!: Hud;
   firstPerson = false;
   now = 0;
   kills = 0;
@@ -75,15 +76,15 @@ export class Game {
   private nextShotAt = 0;
   private prevFire = false;
   private deadTimer = 0;
-  private viewmodel: TransformNode;
+  private viewmodel!: TransformNode;
   private vmGuns = new Map<WeaponId, TransformNode>();
-  private vmMuzzle: TransformNode;
+  private vmMuzzle!: TransformNode;
   private vmKick = 0;
   private chests: AmmoChest[] = [];
   private fpsAcc = 0;
   private fpsFrames = 0;
   private fpsShown = 0;
-  private camDist = 3.2;
+  private camDist = 3.6;
   private rng = makeRng(7);
   private emptyWarnAt = 0;
   onGameOver: (kills: number) => void = () => undefined;
@@ -131,7 +132,21 @@ export class Game {
     this.camera.fov = 1.05;
     this.camera.inputs.clear();
     scene.activeCamera = this.camera;
+    this.sun = sun;
+  }
 
+  /** Сборка игры: сначала грузим модели персонажей и оружия, потом строим мир */
+  static async create(canvas: HTMLCanvasElement, input: Input, opts: GameOptions): Promise<Game> {
+    const g = new Game(canvas, input, opts);
+    await loadModels(g.scene);
+    g.build();
+    return g;
+  }
+
+  private sun!: DirectionalLight;
+
+  private build(): void {
+    const { scene, opts, sun } = this;
     this.world = new World(scene);
     this.effects = new Effects(scene, opts.lowFx || opts.touch);
     this.player = new Player(scene, opts.clan);
@@ -195,31 +210,22 @@ export class Game {
       build(g);
       this.vmGuns.set(id, g);
     };
-    const box = (g: TransformNode, hex: string, w: number, h: number, d: number, x: number, y: number, z: number, glow = 0) => {
-      const b = MeshBuilder.CreateBox(`vmPart`, { width: w, height: h, depth: d }, this.scene);
-      b.material = flatMat(this.scene, hex, glow);
-      b.parent = g;
-      b.position.set(x, y, z);
-      return b;
-    };
-    mk("weakPistol", (g) => {
-      box(g, "#2b2f36", 0.045, 0.06, 0.2, 0, 0.03, 0.06);
-      box(g, "#2b2f36", 0.04, 0.09, 0.05, 0, -0.03, -0.0);
-    });
-    mk("strongPistol", (g) => {
-      box(g, "#3a3f4a", 0.06, 0.075, 0.3, 0, 0.035, 0.1);
-      box(g, "#1e2126", 0.05, 0.1, 0.06, 0, -0.03, -0.0);
-      box(g, "#c9a227", 0.065, 0.02, 0.08, 0, 0.08, 0.16);
-    });
-    mk("clanWeapon", (g) => {
-      box(g, clan.color, 0.12, 0.12, 0.24, 0, 0.02, 0.06);
-      box(g, clan.accent, 0.1, 0.05, 0.1, 0, -0.04, 0.2);
-      box(g, clan.accent, 0.1, 0.04, 0.1, 0, 0.07, 0.2);
-      const orb = MeshBuilder.CreateIcoSphere("vmOrb", { radius: 0.04, subdivisions: 1 }, this.scene);
-      orb.material = flatMat(this.scene, clan.effect === "fire" ? "#ff8a1c" : "#7dff3a", 1);
-      orb.parent = g;
-      orb.position.set(0, 0.02, 0.22);
-    });
+    // Те же бластеры Kenney, что и у персонажей; ствол смотрит вдоль +Z камеры
+    const models = getModels();
+    const vmGun = (id: WeaponId, scale: number) =>
+      mk(id, (g) => {
+        const gi = models.guns[gunKey(id, this.opts.clan)].instantiateModelsToScene((n) => `vm_${id}_${n}`, false, {
+          doNotInstantiate: true,
+        });
+        const r = gi.rootNodes[0] as TransformNode;
+        r.parent = g;
+        r.scaling.scaleInPlace(scale);
+        r.position.set(0, 0.02, 0.1);
+        for (const m of r.getChildMeshes(false)) m.material = models.gunMat;
+      });
+    vmGun("weakPistol", 0.32);
+    vmGun("strongPistol", 0.36);
+    vmGun("clanWeapon", 0.42);
     const muzzle = new TransformNode("vmMuzzle", this.scene);
     muzzle.parent = vm;
     muzzle.position.set(0, 0.04, 0.3);
@@ -384,7 +390,7 @@ export class Game {
     // Третье лицо: камера за правым плечом, не проходит сквозь стены
     const fwd = dirFromYawPitch(p.yaw, p.pitch);
     const right = new Vector3(Math.cos(p.yaw), 0, -Math.sin(p.yaw));
-    const pivot = eye.add(right.scale(0.55)).add(new Vector3(0, 0.15, 0));
+    const pivot = eye.add(right.scale(0.75)).add(new Vector3(0, 0.15, 0));
     const back = fwd.scale(-1);
     const ray = new Ray(pivot, back, this.camDist + 0.3);
     const hit = this.scene.pickWithRay(ray, isWorld, false);

@@ -65,14 +65,14 @@ function startGame(): void {
   input.reset();
   showScreen("loading");
   // Даём браузеру нарисовать «Загрузка…» перед тяжёлой сборкой сцены
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
       if (game && game.opts.clan !== clan) {
         game.dispose();
         game = null;
       }
       if (!game) {
-        game = new Game(canvas, input, { clan, touch, lowFx, testMode, botCount });
+        game = await Game.create(canvas, input, { clan, touch, lowFx, testMode, botCount });
         game.onDeath = (lives) => {
           $("dead-text").textContent =
             lives === 1 ? "Осталась последняя жизнь. Возрождение на базе…" : `Осталось жизней: ${lives}. Возрождение на базе…`;
