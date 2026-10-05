@@ -141,8 +141,9 @@ export class Humanoid {
     this.setWeapon("weakPistol");
 
     for (const m of this.meshes) {
+      // Персонажи двигаются, поэтому рамку для отсечения пересчитываем каждый кадр:
+      // с doNotSyncBoundingInfo тело пропадало, стоило отойти от точки появления
       m.isPickable = false;
-      m.doNotSyncBoundingInfo = true;
     }
   }
 
