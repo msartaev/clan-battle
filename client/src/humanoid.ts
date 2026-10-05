@@ -175,7 +175,7 @@ export class Humanoid {
     // Правая рука держит оружие по линии прицела, левая поддерживает
     const aim = -Math.PI / 2 + pitch - this.torso.rotation.x;
     this.armR.rotation.set(aim, 0, 0);
-    this.armL.rotation.set(aim + 0.3, 0, 0.45);
+    this.armL.rotation.set(aim + 0.15, 0, -0.5);
   }
 
   getMuzzlePosition(): Vector3 {

@@ -2,8 +2,10 @@ import {
   Color3,
   DynamicTexture,
   InstancedMesh,
+  Matrix,
   Mesh,
   MeshBuilder,
+  Quaternion,
   Scene,
   StandardMaterial,
   Texture,
@@ -13,6 +15,7 @@ import {
 } from "@babylonjs/core";
 import { CLANS, type ClanId } from "@clan-battle/shared";
 import { flatMat } from "./humanoid";
+import { getModels, type NatureId } from "./models";
 import { makeRng } from "./utils";
 
 /** Тип объекта для выстрелов и видимости */
@@ -65,7 +68,7 @@ export class World {
   private mRoof2: StandardMaterial;
   private mConcrete: StandardMaterial;
 
-  constructor(private scene: Scene) {
+  constructor(private scene: Scene, detail = 1) {
     this.mWood = this.woodMat("wood", "#a8743f");
     this.mWood2 = this.woodMat("wood2", "#8d5b33");
     this.mWoodDark = flatMat(scene, "#5c3b22");
@@ -84,6 +87,8 @@ export class World {
     this.buildForest();
     this.buildHayField();
     this.scatterAmmo();
+    this.buildStones();
+    this.scatterDecor(detail);
 
     for (const m of this.staticMeshes) {
       m.freezeWorldMatrix();
@@ -544,95 +549,128 @@ export class World {
 
   // ---------- Лес ----------
 
-  private treeBases: { pineTrunk: Mesh; pineTop: Mesh; leafTrunk: Mesh; leafTop: Mesh } | null = null;
 
-  private getTreeBases() {
-    if (this.treeBases) return this.treeBases;
-    const trunkMat = flatMat(this.scene, "#6b4a2b");
-    const pineMat = flatMat(this.scene, "#2f6b3a");
-    const leafMat = flatMat(this.scene, "#4f9a3a");
-
-    const pineTrunk = MeshBuilder.CreateCylinder("pineTrunk", { diameterTop: 0.25, diameterBottom: 0.4, height: 2.4, tessellation: 6 }, this.scene);
-    pineTrunk.position.y = 1.2;
-    pineTrunk.bakeCurrentTransformIntoVertices();
-    pineTrunk.material = trunkMat;
-    const cones: Mesh[] = [];
-    [
-      [2.2, 3.2, 2.9],
-      [1.7, 2.6, 4.4],
-      [1.1, 2.0, 5.7],
-    ].forEach(([dia, hgt, y], k) => {
-      const c = MeshBuilder.CreateCylinder(`pineCone${k}`, { diameterTop: 0, diameterBottom: dia * 1.5, height: hgt, tessellation: 7 }, this.scene);
-      c.position.y = y;
-      cones.push(c);
-    });
-    const pineTop = Mesh.MergeMeshes(cones, true)!;
-    pineTop.name = "pineTop";
-    pineTop.material = pineMat;
-
-    const leafTrunk = MeshBuilder.CreateCylinder("leafTrunk", { diameterTop: 0.25, diameterBottom: 0.38, height: 2.6, tessellation: 6 }, this.scene);
-    leafTrunk.position.y = 1.3;
-    leafTrunk.bakeCurrentTransformIntoVertices();
-    leafTrunk.material = trunkMat;
-    const blobs: Mesh[] = [];
-    [
-      [0, 3.6, 0, 3.0],
-      [0.8, 3.1, 0.3, 2.0],
-      [-0.7, 3.3, -0.4, 2.2],
-    ].forEach(([bx, by, bz, s], k) => {
-      const b = MeshBuilder.CreateIcoSphere(`leafBlob${k}`, { radius: s / 2, subdivisions: 1, flat: true }, this.scene);
-      b.position.set(bx, by, bz);
-      blobs.push(b);
-    });
-    const leafTop = Mesh.MergeMeshes(blobs, true)!;
-    leafTop.name = "leafTop";
-    leafTop.material = leafMat;
-
-    for (const m of [pineTrunk, pineTop, leafTrunk, leafTop]) {
-      m.isVisible = false;
-      m.isPickable = false;
-    }
-    this.treeBases = { pineTrunk, pineTop, leafTrunk, leafTop };
-    return this.treeBases;
-  }
+  /** Отдельный генератор для выбора моделей и декора, чтобы не сдвигать раскладку карты */
+  private rngLook = makeRng(4242);
+  private trunkCollider: Mesh | null = null;
 
   private placeTree(x: number, z: number): void {
-    const tb = this.getTreeBases();
+    const models = getModels();
     const pine = this.rng() < 0.55;
     const s = 0.8 + this.rng() * 0.5;
     const rot = this.rng() * Math.PI * 2;
-    const trunk = (pine ? tb.pineTrunk : tb.leafTrunk).createInstance(`trunk_${x}_${z}`);
+    const pick = this.rngLook();
+    const id: NatureId = pine
+      ? pick < 0.5 ? "tree_pineDefaultA" : "tree_pineRoundC"
+      : pick < 0.4 ? "tree_default" : pick < 0.7 ? "tree_oak" : "tree_detailed";
+    // Высота дерева 5.5–8 м
+    const h = (pine ? 6.5 : 5.5) * s;
+    const tree = models.nature(id).createInstance(`tree_${x}_${z}`);
+    tree.position.set(x, 0, z);
+    tree.scaling.setAll(h);
+    tree.rotation.y = rot;
+    // Крона закрывает обзор, но пули через неё летят
+    this.register(tree, "soft", false, true);
+
+    // Ствол — невидимый цилиндр: в него упираешься и в него попадают пули
+    if (!this.trunkCollider) {
+      const c = MeshBuilder.CreateCylinder("trunkCollider", { diameter: 0.5, height: 3, tessellation: 6 }, this.scene);
+      c.position.y = 1.5;
+      c.bakeCurrentTransformIntoVertices();
+      c.isVisible = false;
+      c.isPickable = false;
+      this.trunkCollider = c;
+    }
+    const trunk = this.trunkCollider.createInstance(`trunk_${x}_${z}`);
     trunk.position.set(x, 0, z);
-    trunk.scaling.set(s, s, s);
-    trunk.rotation.y = rot;
-    const top = (pine ? tb.pineTop : tb.leafTop).createInstance(`top_${x}_${z}`);
-    top.position.set(x, 0, z);
-    top.scaling.set(s, s, s);
-    top.rotation.y = rot;
-    this.register(trunk, "world", true, true);
-    this.register(top, "soft", false, true);
+    trunk.scaling.set(s, 1, s);
+    trunk.isVisible = false;
+    this.register(trunk, "world", true);
     this.obstacles.push({ x0: x - 1.2, z0: z - 1.2, x1: x + 1.2, z1: z + 1.2 });
   }
 
-  private bushBase: Mesh | null = null;
-
   private placeBush(x: number, z: number): void {
-    if (!this.bushBase) {
-      const b = MeshBuilder.CreateIcoSphere("bushBase", { radius: 1, subdivisions: 1, flat: true }, this.scene);
-      b.material = flatMat(this.scene, "#3e8a34");
-      b.isVisible = false;
-      b.isPickable = false;
-      this.bushBase = b;
-    }
     const s = 0.8 + this.rng() * 0.5;
-    const inst = this.bushBase.createInstance(`bush_${x}_${z}`);
-    inst.position.set(x, 0.45 * s, z);
-    inst.scaling.set(1.2 * s, 0.85 * s, 1.2 * s);
-    inst.rotation.y = this.rng() * 3;
+    const rot = this.rng() * 3;
+    const id: NatureId = this.rngLook() < 0.6 ? "plant_bushLarge" : "plant_bushDetailed";
+    const inst = getModels().nature(id).createInstance(`bush_${x}_${z}`);
+    inst.position.set(x, 0, z);
+    // Куст ~1.1 м в высоту и ~2.5 м в ширину: за ним можно присесть и спрятаться
+    inst.scaling.set(1.35 * s, 1.1 * s, 1.35 * s);
+    inst.rotation.y = rot;
     // Через куст можно пройти и спрятаться; он закрывает обзор, но не пули
     this.register(inst, "soft", false);
     this.covers.push({ x, z, r: 1.3 * s + 0.4 });
     this.obstacles.push({ x0: x - 1.2, z0: z - 1.2, x1: x + 1.2, z1: z + 1.2 });
+  }
+
+  /** Валуны: твёрдые, за ними можно укрыться от пуль */
+  private placeStone(x: number, z: number): void {
+    const r = this.rngLook;
+    const tall = r() < 0.3;
+    const id: NatureId = tall ? "stone_tallB" : r() < 0.5 ? "stone_largeA" : "stone_largeC";
+    const s = 0.8 + r() * 0.6;
+    const inst = getModels().nature(id).createInstance(`stone_${x}_${z}`);
+    inst.position.set(x, -0.05, z);
+    // Модель уже в своих пропорциях: низкий валун ~3 м в ширину, высокий ~1.8 м в высоту
+    inst.scaling.setAll((tall ? 1.8 : 0.8) * s);
+    inst.rotation.y = r() * Math.PI * 2;
+    this.register(inst, "world", true, true);
+    this.covers.push({ x, z, r: 1.6 * s });
+    this.obstacles.push({ x0: x - 1.6, z0: z - 1.6, x1: x + 1.6, z1: z + 1.6 });
+  }
+
+  /**
+   * Мелкие детали без столкновений: цветы, трава, грибы, пни, брёвна.
+   * Ставятся в самом конце и собственным генератором — на раскладку не влияют.
+   */
+  private scatterDecor(detail: number): void {
+    const r = this.rngLook;
+    const decor: [NatureId, number, number][] = [
+      // модель, сколько штук на полной детализации, высота, м
+      ["grass_large", 260, 0.35],
+      ["grass_leafsLarge", 120, 0.3],
+      ["flower_redA", 60, 0.4],
+      ["flower_yellowA", 60, 0.4],
+      ["flower_purpleA", 50, 0.4],
+      ["mushroom_redGroup", 25, 0.3],
+      ["stump_round", 18, 0.45],
+      ["log", 12, 0.4],
+    ];
+    for (const [id, count, h] of decor) {
+      // Тонкие экземпляры: вся россыпь одной модели — одна сетка и один вызов отрисовки,
+      // без проверки видимости каждой травинки на процессоре
+      const base = getModels().nature(id);
+      const n = Math.round(count * detail);
+      const matrices: Matrix[] = [];
+      for (let i = 0; i < n; i++) {
+        const x = (r() * 2 - 1) * (MAP_HALF - 3);
+        const z = (r() * 2 - 1) * (MAP_HALF - 3);
+        if (!this.isFree(x, z, 0.3)) continue;
+        const sc = h * (0.75 + r() * 0.5);
+        matrices.push(Matrix.Compose(new Vector3(sc, sc, sc), Quaternion.RotationYawPitchRoll(r() * Math.PI * 2, 0, 0), new Vector3(x, 0, z)));
+      }
+      if (!matrices.length) continue;
+      const buf = new Float32Array(matrices.length * 16);
+      matrices.forEach((m, i) => m.copyToArray(buf, i * 16));
+      base.thinInstanceSetBuffer("matrix", buf, 16, true);
+      base.thinInstanceRefreshBoundingInfo(false);
+      base.isVisible = true;
+      base.isPickable = false;
+      base.freezeWorldMatrix();
+    }
+  }
+
+  private buildStones(): void {
+    // Валуны в лесу, на поле и вдоль дорог за деревней
+    for (let i = 0; i < 14; i++) {
+      const p = this.findFree(-62, 16, -10, 62, 2.5);
+      if (p) this.placeStone(p.x, p.z);
+    }
+    for (let i = 0; i < 10; i++) {
+      const p = this.findFree(-62, -62, 62, 62, 3);
+      if (p) this.placeStone(p.x, p.z);
+    }
   }
 
   private buildForest(): void {

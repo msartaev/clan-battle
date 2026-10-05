@@ -147,7 +147,8 @@ export class Game {
 
   private build(): void {
     const { scene, opts, sun } = this;
-    this.world = new World(scene);
+    // На телефонах и в режиме ?low мелких деталей (трава, цветы) втрое меньше
+    this.world = new World(scene, opts.lowFx || opts.touch ? 0.35 : 1);
     this.effects = new Effects(scene, opts.lowFx || opts.touch);
     this.player = new Player(scene, opts.clan);
     this.hud = new Hud(opts.clan);
