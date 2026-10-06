@@ -145,6 +145,8 @@ function photoMat(scene: Scene, file: string, tint = "#ffffff"): StandardMateria
 
 export class World {
   readonly windows: WindowPane[] = [];
+  /** Стволы деревьев — по ним рубят дерево для торговца */
+  readonly treeSpots: Vector3[] = [];
   /** Машины деревни: на них можно ездить */
   readonly cars: { mesh: Mesh; yaw: number; home: Vector3; homeYaw: number }[] = [];
   private glassMat: StandardMaterial | null = null;
@@ -801,6 +803,7 @@ export class World {
       c.isPickable = false;
       this.trunkCollider = c;
     }
+    this.treeSpots.push(new Vector3(x, 0, z));
     const trunk = this.trunkCollider.createInstance(`trunk_${x}_${z}`);
     trunk.position.set(x, 0, z);
     trunk.scaling.set(s, 1, s);

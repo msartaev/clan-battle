@@ -604,6 +604,56 @@ const browser = await chromium.launch({
   if (!botBombTest.frozen || botBombTest.meleeHp >= botBombTest.hp0) errors.push("[desktop] bot bomb test: бомба бота или нож не работают");
   await page.evaluate(() => window.__game.resetMatch());
 
+  // Торговец: дерево с деревьев мечом, охранник за ресурсы стережёт бункер и бьёт врага, шипы ранят
+  const traderTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    const p = g.player;
+    const V = p.collider.position.constructor;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    p.invulnerableUntil = g.now + 999;
+    g.bots.forEach((b) => b.spawn(new V(-50, 0, 60), 0));
+    // Рубим дерево
+    const tr = g.world.treeSpots[0];
+    p.collider.position.set(tr.x, 0, tr.z - 1.6);
+    p.yaw = 0;
+    p.selectWeapon(4);
+    g["strike"](1);
+    const wood = g.res.wood;
+    // Торговец приходит
+    g.res.wood = 20;
+    g.res.leather = 5;
+    g.nextTraderAt = g.now;
+    await frames(2);
+    const spot = g["trader"].root.position;
+    p.collider.position.set(spot.x + 1, 0, spot.z);
+    await frames(2);
+    const near = g["nearTrader"]();
+    g.input.use = true;
+    await frames(2);
+    const open = g["shopOpen"];
+    g["buy"]("guard");
+    g["buy"]("spikes");
+    const guard = g.bots.find((b) => b.guardHome && b.clan === p.clan && b.alive);
+    // Враг подходит к охраннику
+    const enemy = g.bots.find((b) => b.clan !== p.clan && !b.guardHome);
+    enemy.spawn(guard.position.add(new V(1.2, 0, 0)), 0);
+    enemy.update = () => {};
+    const eh0 = enemy.hp;
+    await frames(40);
+    delete enemy.update;
+    g["closeShop"]();
+    return { wood, near, open, guard: !!guard, guardHp: guard?.maxHp, spikes: g["spikes"].length, enemyHurt: eh0 - enemy.hp, left: { ...g.res } };
+  });
+  console.log("trader test:", traderTest);
+  if (traderTest.wood !== 1 || !traderTest.near || !traderTest.open || !traderTest.guard || traderTest.guardHp !== 200 || traderTest.spikes !== 1 || traderTest.enemyHurt <= 0)
+    errors.push("[desktop] trader test: торговец, охранник или шипы работают не так");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;

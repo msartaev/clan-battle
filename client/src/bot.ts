@@ -42,6 +42,10 @@ export class Bot {
   readonly humanoid: Humanoid;
   readonly weapon: WeaponId;
   hp: number = RULES.maxHp;
+  /** Здоровье при появлении: у охранника 200 */
+  readonly maxHp: number;
+  /** Охранник: стережёт точку (бункер), бьёт мечом, не стреляет и не бегает за флагом */
+  readonly guardHome: Vector3 | null;
   lives: number = RULES.lives;
   /** Когда последний раз ранили — захват флага сбрасывается */
   lastHitAt = -999;
@@ -80,8 +84,11 @@ export class Bot {
   /** Метка над головой союзника */
   private allyMark: Mesh | null = null;
 
-  constructor(scene: Scene, readonly clan: ClanId, weapon: WeaponId, readonly friendly = false) {
+  constructor(scene: Scene, readonly clan: ClanId, weapon: WeaponId, readonly friendly = false, guardHome: Vector3 | null = null) {
     this.id = ++botCounter;
+    this.guardHome = guardHome;
+    this.maxHp = guardHome ? 200 : RULES.maxHp;
+    this.hp = this.maxHp;
     this.weapon = weapon;
     this.collider = MeshBuilder.CreateBox(`botCollider${this.id}`, { size: 0.5 }, scene);
     this.collider.isVisible = false;
@@ -89,7 +96,10 @@ export class Bot {
     this.collider.checkCollisions = true;
     this.collider.ellipsoid = new Vector3(0.35, 0.9, 0.35);
     this.collider.ellipsoidOffset = new Vector3(0, 0.9, 0);
-    this.humanoid = new Humanoid(scene, `bot${this.id}`, randomLook(clan));
+    // Охранник — в рабочей куртке с жилетом, крупнее обычного бойца
+    const look = guardHome ? { clan, body: "worker" as const } : randomLook(clan);
+    this.humanoid = new Humanoid(scene, `bot${this.id}`, look);
+    if (guardHome) this.humanoid.root.scaling.setAll(1.12);
     this.humanoid.setWeapon(weapon);
 
     // Полоска здоровья над головой (видна после попадания)
@@ -136,7 +146,7 @@ export class Bot {
     this.collider.position.y = 0;
     this.collider.checkCollisions = true;
     this.yaw = yaw;
-    this.hp = RULES.maxHp;
+    this.hp = this.maxHp;
     this.state = "wander";
     this.goal.copyFrom(pos);
     this.sees = false;
@@ -244,6 +254,11 @@ export class Bot {
     let moveSpeed = 0;
     let faceTarget: Vector3 | null = null;
     const pos = this.collider.position;
+
+    if (this.guardHome) {
+      this.updateGuard(dt, ctx);
+      return;
+    }
 
     const obj = this.state === "wander" ? ctx.objective(this) : null;
     if (obj) {
@@ -389,15 +404,77 @@ export class Bot {
     this.allyMark?.position.set(pos.x, pos.y + 2.25, pos.z);
 
     // Полоска здоровья
-    const showBar = ctx.now < this.hpBarShowUntil && this.hp < RULES.maxHp;
+    const showBar = ctx.now < this.hpBarShowUntil && this.hp < this.maxHp;
     this.hpBarBg.setEnabled(showBar);
     if (showBar) {
       this.hpBarBg.position.set(pos.x, pos.y + 2.15, pos.z);
-      const k = this.hp / RULES.maxHp;
+      const k = this.hp / this.maxHp;
       this.hpBar.scaling.x = Math.max(0.001, k);
       this.hpBar.position.x = -(0.76 * (1 - k)) / 2;
     }
 
+    this.syncHumanoid(dt);
+  }
+
+  /** Охранник: патруль вокруг бункера, бросается на врага рядом, далеко от поста не уходит */
+  private updateGuard(dt: number, ctx: BotContext): void {
+    const home = this.guardHome!;
+    const pos = this.collider.position;
+    this.meleeCooldown -= dt;
+    this.humanoid.setWeapon("sword");
+    let move = Vector3.Zero();
+    let speed = 0;
+    let face: Vector3 | null = null;
+    const t = this.target;
+    const leash = 22;
+    if (t && t.alive && this.state === "chase" && Vector3.Distance(t.pos, home) < leash) {
+      const to = t.pos.subtract(pos);
+      to.y = 0;
+      const dist = to.length();
+      face = t.pos;
+      if (dist > 1.7) {
+        move = to;
+        speed = 4.6;
+      } else if (this.meleeCooldown <= 0) {
+        this.meleeCooldown = 1.0;
+        this.humanoid.swing();
+        ctx.melee(this, t);
+      }
+    } else {
+      // Обход поста по кругу радиусом ~8 м
+      if (this.state === "chase") this.state = "wander";
+      if (Vector3.DistanceSquared(pos, this.goal) < 2 || Vector3.DistanceSquared(this.goal, home) > 12 * 12) {
+        const a = Math.random() * Math.PI * 2;
+        this.goal = home.add(new Vector3(Math.sin(a) * 8, 0, Math.cos(a) * 8));
+      }
+      move = this.goal.subtract(pos);
+      speed = 1.8;
+      face = this.goal;
+    }
+    move.y = 0;
+    const len = move.length();
+    const before = pos.clone();
+    if (len > 0.05 && speed > 0) {
+      move.scaleInPlace((speed * dt) / len);
+      this.collider.moveWithCollisions(move);
+      pos.y = 0;
+    }
+    this.speed = Vector3.Distance(before, pos) / Math.max(dt, 1e-4);
+    if (face) {
+      const d = face.subtract(pos);
+      if (d.x * d.x + d.z * d.z > 0.01) this.yaw += clamp(angleDiff(this.yaw, Math.atan2(d.x, d.z)), -6 * dt, 6 * dt);
+    }
+    this.aimPitch = 0.1;
+    this.allyMark?.setEnabled(true);
+    this.allyMark?.position.set(pos.x, pos.y + 2.45, pos.z);
+    const showBar = ctx.now < this.hpBarShowUntil && this.hp < this.maxHp;
+    this.hpBarBg.setEnabled(showBar);
+    if (showBar) {
+      this.hpBarBg.position.set(pos.x, pos.y + 2.35, pos.z);
+      const k = this.hp / this.maxHp;
+      this.hpBar.scaling.x = Math.max(0.001, k);
+      this.hpBar.position.x = -(0.76 * (1 - k)) / 2;
+    }
     this.syncHumanoid(dt);
   }
 

@@ -29,6 +29,7 @@ import {
   type WeaponId,
 } from "@clan-battle/shared";
 import { Animal, type Prey } from "./animals";
+import { Humanoid } from "./humanoid";
 import { Birds } from "./birds";
 import { Bot, type BotContext, type Target } from "./bot";
 import { Effects, Sfx } from "./effects";
@@ -136,6 +137,16 @@ export class Game {
   private medkits: AmmoChest[] = [];
   readonly animals: Animal[] = [];
   private birds!: Birds;
+  /** Ресурсы для торговца: дерево (рубить мечом) и кожа (со зверей) */
+  res = { wood: 0, leather: 0 };
+  /** Торговец: приходит к бункеру раз в минуту на 30 с */
+  private trader: Humanoid | null = null;
+  private traderUntil = -1;
+  private nextTraderAt = 60;
+  private shopOpen = false;
+  /** Сколько охранников клан уже купил (цена растёт) */
+  private guardsBought: Record<ClanId, number> = { dragons: 0, snakes: 0 };
+  private spikes: { mesh: Mesh; pos: Vector3; uses: number; clan: ClanId; hitAt: Map<object, number> }[] = [];
   /** За рулём какой машины (или null) */
   driving: { mesh: Mesh; yaw: number; home: Vector3; homeYaw: number; speed?: number } | null = null;
   private carSpeed = 0;
@@ -451,6 +462,190 @@ export class Game {
     }
   }
 
+  // ---------------- Торговец, охранники, шипы ----------------
+
+  private gainLeather(a: Animal): void {
+    const n = a.kind === "bear" ? 3 : a.kind === "moose" ? 2 : 1;
+    this.res.leather += n;
+    this.hud.message(`${a.info.name} повержен: +${n} 🟫 кожи`, 1.6, "#ffe1a8");
+  }
+
+  /** Где стоит торговец: перед бункером своего клана */
+  private traderSpot(): Vector3 {
+    const base = this.world.bases[this.player.clan];
+    return base.spawns[0].add(base.spawns[1].subtract(base.spawns[0]).scale(0.5)).add(new Vector3(2, 0, 2));
+  }
+
+  private nearTrader(): boolean {
+    if (!this.trader || this.now > this.traderUntil) return false;
+    const t = this.trader.root.position;
+    const p = this.player.position;
+    return (t.x - p.x) ** 2 + (t.z - p.z) ** 2 < 3.2 * 3.2;
+  }
+
+  private guardPrice(clan: ClanId): { wood: number; leather: number } {
+    const k = 1 + this.guardsBought[clan] * 0.5;
+    return { wood: Math.round(6 * k), leather: Math.round(1 * k) };
+  }
+
+  private updateTrader(dt: number): void {
+    void dt;
+    if (this.state !== "playing" && this.state !== "dead") return;
+    if (this.now >= this.nextTraderAt) {
+      this.nextTraderAt = this.now + 60;
+      this.traderUntil = this.now + 30;
+      if (!this.trader) this.trader = new Humanoid(this.scene, "trader", { clan: this.player.clan, body: "casual_2" });
+      const at = this.traderSpot();
+      this.trader.root.position.copyFrom(at);
+      this.trader.setEnabled(true);
+      this.trader.setWeapon("sword");
+      this.hud.message("Пришёл торговец к твоему бункеру! (30 с)", 2.4, "#ffe1a8");
+      // Вражеский клан тоже закупается: иногда нанимает охранника
+      const enemy = enemyClan(this.player.clan);
+      if (Math.random() < 0.6) this.hireGuard(enemy);
+    }
+    if (this.trader && this.trader.root.isEnabled()) {
+      // Стоит и поворачивается к игроку
+      const d = this.player.position.subtract(this.trader.root.position);
+      this.trader.root.rotation.y = Math.atan2(d.x, d.z);
+      this.trader.animate(dt, 0, false, 0.15, false);
+      if (this.now > this.traderUntil) {
+        this.trader.setEnabled(false);
+        this.closeShop();
+        this.hud.message("Торговец ушёл. Вернётся через полминуты", 1.6, "#ffe1a8");
+      }
+    }
+    if (this.shopOpen) this.renderShop();
+    document.body.classList.toggle("near-trader", this.nearTrader());
+  }
+
+  private toggleShop(): void {
+    if (this.shopOpen) this.closeShop();
+    else this.openShop();
+  }
+
+  private openShop(): void {
+    this.shopOpen = true;
+    const el = document.getElementById("shop")!;
+    el.classList.remove("hidden");
+    if (document.pointerLockElement) document.exitPointerLock();
+    if (!el.dataset.bound) {
+      el.dataset.bound = "1";
+      el.querySelectorAll<HTMLButtonElement>("button[data-buy]").forEach((b) =>
+        b.addEventListener("click", () => this.buy(b.dataset.buy as "guard" | "spikes" | "weak")),
+      );
+      el.querySelector(".shop-close")!.addEventListener("click", () => this.closeShop());
+    }
+    this.renderShop();
+  }
+
+  private closeShop(): void {
+    if (!this.shopOpen) return;
+    this.shopOpen = false;
+    document.getElementById("shop")!.classList.add("hidden");
+  }
+
+  private renderShop(): void {
+    const el = document.getElementById("shop")!;
+    const r = this.res;
+    el.querySelector(".shop-res")!.textContent = `У тебя: 🪵 ${r.wood} дерева · 🟫 ${r.leather} кожи`;
+    const gp = this.guardPrice(this.player.clan);
+    const guards = this.bots.filter((b) => b.guardHome && b.clan === this.player.clan && b.alive).length;
+    const set = (key: string, text: string, ok: boolean) => {
+      const b = el.querySelector<HTMLButtonElement>(`button[data-buy="${key}"]`)!;
+      b.textContent = text;
+      b.disabled = !ok;
+    };
+    set("guard", `🛡 Охранник (${guards}/10) — ${gp.wood} 🪵 + ${gp.leather} 🟫`, r.wood >= gp.wood && r.leather >= gp.leather && guards < 10);
+    set("spikes", "⚠️ Шипы у входа — 3 🪵", r.wood >= 3);
+    set("weak", "🟢 Лечебная бомба — 2 🪵 + 1 🟫", r.wood >= 2 && r.leather >= 1 && this.bombs.weak < RULES.maxBombs);
+    el.querySelector(".shop-left")!.textContent = String(Math.max(0, Math.ceil(this.traderUntil - this.now)));
+  }
+
+  private buy(what: "guard" | "spikes" | "weak"): void {
+    const r = this.res;
+    if (what === "guard") {
+      const gp = this.guardPrice(this.player.clan);
+      if (r.wood < gp.wood || r.leather < gp.leather) return;
+      if (!this.hireGuard(this.player.clan)) return;
+      r.wood -= gp.wood;
+      r.leather -= gp.leather;
+      this.hud.message("Охранник нанят — стережёт бункер", 1.6, "#7dffb0");
+    } else if (what === "spikes") {
+      if (r.wood < 3) return;
+      r.wood -= 3;
+      this.placeSpikes(this.player.clan);
+      this.hud.message("Шипы поставлены у входа в бункер", 1.6, "#7dffb0");
+    } else {
+      if (r.wood < 2 || r.leather < 1 || this.bombs.weak >= RULES.maxBombs) return;
+      r.wood -= 2;
+      r.leather -= 1;
+      this.bombs.weak++;
+    }
+    this.sfx.pickup();
+    this.renderShop();
+  }
+
+  /** Нанять охранника клану: появляется у бункера. Не больше 10 живых на клан */
+  private hireGuard(clan: ClanId): boolean {
+    const alive = this.bots.filter((b) => b.guardHome && b.clan === clan && b.alive).length;
+    if (alive >= 10) return false;
+    const base = this.world.bases[clan];
+    const home = base.flagPoint.clone();
+    // Переиспользуем выбывшего охранника, если есть (без лишних сеток)
+    let g = this.bots.find((b) => b.guardHome && b.clan === clan && !b.alive && b.lives <= 0);
+    if (!g) {
+      g = new Bot(this.scene, clan, "weakPistol", clan === this.player.clan, home);
+      this.bots.push(g);
+    }
+    g.lives = 1;
+    const a = Math.random() * Math.PI * 2;
+    g.spawn(home.add(new Vector3(Math.sin(a) * 6, 0, Math.cos(a) * 6)), a);
+    this.guardsBought[clan]++;
+    return true;
+  }
+
+  /** Шипы перед входом бункера: ранят врагов и зверей, 4 срабатывания */
+  private placeSpikes(clan: ClanId): void {
+    const base = this.world.bases[clan];
+    const door = base.spawns[0].add(base.spawns[1]).scale(0.5);
+    const at = door.add(new Vector3((Math.random() - 0.5) * 6, 0, (Math.random() - 0.5) * 3));
+    const parts: Mesh[] = [];
+    for (let i = 0; i < 9; i++) {
+      const c = MeshBuilder.CreateCylinder("spike", { height: 0.35, diameterTop: 0, diameterBottom: 0.12, tessellation: 4 }, this.scene);
+      c.position.set(((i % 3) - 1) * 0.3, 0.17, (Math.floor(i / 3) - 1) * 0.3);
+      parts.push(c);
+    }
+    const plate = MeshBuilder.CreateBox("spikePlate", { width: 1.0, height: 0.04, depth: 1.0 }, this.scene);
+    parts.push(plate);
+    const m = Mesh.MergeMeshes(parts, true)!;
+    m.material = flatMat(this.scene, "#6b6f75");
+    m.position.copyFrom(at);
+    m.isPickable = false;
+    this.spikes.push({ mesh: m, pos: at, uses: 4, clan, hitAt: new Map() });
+  }
+
+  private updateSpikes(): void {
+    for (let i = this.spikes.length - 1; i >= 0; i--) {
+      const sp = this.spikes[i];
+      const stepOn = (pos: Vector3, key: object, hurt: () => void) => {
+        if ((pos.x - sp.pos.x) ** 2 + (pos.z - sp.pos.z) ** 2 > 0.75 * 0.75) return;
+        if ((sp.hitAt.get(key) ?? -9) > this.now - 1.5) return;
+        sp.hitAt.set(key, this.now);
+        hurt();
+        sp.uses--;
+        this.sfx.clang();
+      };
+      for (const b of this.bots) if (b.alive && b.clan !== sp.clan) stepOn(b.position, b, () => b.takeDamage(25, sp.pos, this.now));
+      for (const a of this.animals) if (a.alive) stepOn(a.pos, a, () => a.takeDamage(25, null, this.now));
+      if (this.player.clan !== sp.clan && this.player.alive) stepOn(this.player.position, this.player, () => this.damagePlayer(25));
+      if (sp.uses <= 0) {
+        sp.mesh.dispose();
+        this.spikes.splice(i, 1);
+      }
+    }
+  }
+
   // ---------------- Машины ----------------
 
   private nearestCar(): (typeof this.world.cars)[number] | null {
@@ -468,10 +663,13 @@ export class Game {
   }
 
   private updateCarHint(): void {
-    const near = !!this.driving || !!this.nearestCar();
+    const trader = this.nearTrader();
+    const near = trader || !!this.driving || !!this.nearestCar();
     document.body.classList.toggle("near-car", near && this.state === "playing");
     const hint = document.getElementById("car-hint");
-    if (hint) hint.textContent = this.driving ? "E — выйти из машины" : "E — сесть в машину";
+    if (hint) hint.textContent = trader ? (this.shopOpen ? "" : "E — торговать") : this.driving ? "E — выйти из машины" : "E — сесть в машину";
+    const btn = document.getElementById("btn-car");
+    if (btn) btn.textContent = trader ? "Торговец" : "Машина";
   }
 
   private toggleCar(): void {
@@ -595,7 +793,22 @@ export class Game {
     for (const b of this.bots) if (b.alive && b.clan !== p.clan) consider(b.position, 0, { bot: b });
     for (const a of this.animals) if (a.alive) consider(a.pos, a.info.radius, { beast: a });
     const hit = best as { d: number; bot?: Bot; beast?: Animal } | null;
-    if (!hit) return;
+    if (!hit) {
+      // Никого рядом — может, это дерево? Удар мечом по стволу даёт дерево для торговца
+      for (const tr of this.world.treeSpots) {
+        const to = tr.subtract(p.position);
+        to.y = 0;
+        const d = to.length();
+        if (d < 2.4 && Vector3.Dot(to.scale(1 / Math.max(d, 0.01)), f) > 0.5) {
+          this.res.wood++;
+          this.sfx.chop();
+          this.effects.impact(tr.add(new Vector3(0, 1.2, 0)), false);
+          this.hud.message(`+1 🪵 (${this.res.wood})`, 0.8, "#ffe1a8");
+          return;
+        }
+      }
+      return;
+    }
     this.sfx.clang();
     if (hit.bot) {
       this.damageBot(hit.bot, dmg);
@@ -603,7 +816,7 @@ export class Game {
     } else if (hit.beast) {
       const killed = hit.beast.takeDamage(dmg, this.playerPrey, this.now);
       this.hud.hit(killed);
-      if (killed) this.hud.message(`${hit.beast.info.name} повержен`, 1.4, "#ffe14a");
+      if (killed) this.gainLeather(hit.beast);
       this.effects.impact(hit.beast.pos.add(new Vector3(0, hit.beast.info.height * 0.6, 0)), true);
     }
     if (mult > 1.5) this.hud.message(`Сильный удар ×${mult.toFixed(1)}`, 0.9, "#ffe14a");
@@ -941,6 +1154,21 @@ export class Game {
     this.chargeFrom = -1;
     this.bombs = { weak: 1, strong: 0, boom: 1, frost: 1 };
     this.playerFrozenUntil = -1;
+    this.res = { wood: 0, leather: 0 };
+    this.nextTraderAt = 60;
+    this.traderUntil = -1;
+    this.trader?.setEnabled(false);
+    this.closeShop();
+    this.guardsBought = { dragons: 0, snakes: 0 };
+    for (const sp of this.spikes) sp.mesh.dispose();
+    this.spikes = [];
+    // Купленные охранники уходят: новый матч — с нуля
+    for (const b of this.bots.filter((x) => x.guardHome)) {
+      b.lives = 0;
+      b.hp = 0;
+      b.state = "dead";
+      b.humanoid.setEnabled(false);
+    }
     for (const t of this.thrown) t.mesh.dispose();
     this.thrown = [];
     for (const c of this.ice) c.mesh.dispose();
@@ -949,6 +1177,7 @@ export class Game {
     this.player.selectWeapon(0);
     this.respawnPlayer();
     this.bots.forEach((b, i) => {
+      if (b.guardHome) return;
       const base = this.world.bases[b.clan];
       const sp = base.spawns[i % base.spawns.length];
       b.lives = RULES.lives;
@@ -1063,6 +1292,10 @@ export class Game {
         input.use = false;
         input.bomb = null;
       }
+      if (input.use && (this.shopOpen || this.nearTrader())) {
+        this.toggleShop();
+        input.use = false;
+      }
       if (input.use) this.toggleCar();
       if (this.driving) this.updateCar(dt);
       else p.update(dt, input, this.now, () => this.canStand(), (x, z, y) => this.world.floorAt(x, z, y));
@@ -1094,6 +1327,8 @@ export class Game {
     for (const b of this.bots) b.update(dt, ctx);
     this.updateAnimals(dt);
     this.birds.update(dt, this.now);
+    this.updateTrader(dt);
+    this.updateSpikes();
     this.updateDome(dt);
     this.updateThrown(dt);
     if (this.state === "playing" || this.state === "dead") this.updateMatch(dt);
@@ -1115,6 +1350,7 @@ export class Game {
       teams: this.teamCounts(),
       owned: [...p.owned],
       swordLevel: p.swordLevel,
+      res: this.res,
       bombs: this.bombs,
       domeLeft: this.dome ? Math.max(0, this.dome.until - this.now) : 0,
       timeLeft: this.matchLeft,
@@ -1140,7 +1376,7 @@ export class Game {
   private teamCounts(): Record<ClanId, number> {
     const n: Record<ClanId, number> = { dragons: 0, snakes: 0 };
     if (this.player.alive && this.state === "playing") n[this.opts.clan]++;
-    for (const b of this.bots) if (b.alive) n[b.clan]++;
+    for (const b of this.bots) if (b.alive && !b.guardHome) n[b.clan]++;
     return n;
   }
 
@@ -1292,7 +1528,7 @@ export class Game {
       if (beast && beast.alive) {
         const killed = beast.takeDamage(WEAPONS[p.weapon].damage, this.playerPrey, this.now);
         this.hud.hit(killed);
-        if (killed) this.hud.message(`${beast.info.name} повержен`, 1.4, "#ffe14a");
+        if (killed) this.gainLeather(beast);
         this.effects.impact(end, true);
         return;
       }
@@ -1344,7 +1580,7 @@ export class Game {
 
   /** Клан выбыл: у всех ботов кончились жизни и игрок (если он из этого клана) тоже выбыл */
   private clanOut(c: ClanId): boolean {
-    const botsOut = this.bots.filter((b) => b.clan === c).every((b) => !b.alive && b.lives <= 0);
+    const botsOut = this.bots.filter((b) => b.clan === c && !b.guardHome).every((b) => !b.alive && b.lives <= 0);
     const playerOut = this.player.clan !== c || (!this.player.alive && this.player.lives <= 0);
     return botsOut && playerOut;
   }
@@ -1426,7 +1662,7 @@ export class Game {
       shoot: (b, t) => this.botShoot(b, t),
       throwBomb: (b, kind, t) => this.botThrow(b, kind, t),
       melee: (b, t) => {
-        const dmg = 10;
+        const dmg = b.guardHome ? 15 : 10;
         this.sfx.swing(0.6);
         if (t.animal) t.animal.takeDamage(dmg, this.preyOf(b), this.now);
         else if (t.bot) t.bot.takeDamage(dmg, b.position.clone(), this.now);

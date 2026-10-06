@@ -928,3 +928,70 @@ body.near-car #car-hint {
 body.touch #car-hint {
   display: none;
 }
+
+/* ----- Лавка торговца ----- */
+#shop {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(360px, 86vw);
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(20, 24, 30, 0.92);
+  color: #fff;
+  text-align: center;
+  pointer-events: auto;
+  z-index: 40;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+#shop.hidden {
+  display: none;
+}
+#shop h3 {
+  margin: 0 0 6px;
+}
+#shop .shop-res {
+  margin: 0 0 10px;
+  font-size: 18px;
+  font-weight: 700;
+}
+#shop button[data-buy] {
+  display: block;
+  width: 100%;
+  margin: 6px 0;
+  padding: 10px;
+  border-radius: 10px;
+  border: 0;
+  font: inherit;
+  font-weight: 700;
+  background: #2f6fd6;
+  color: #fff;
+  cursor: pointer;
+}
+#shop button[data-buy]:disabled {
+  background: #555;
+  color: #aaa;
+  cursor: default;
+}
+#shop .shop-note {
+  font-size: 12px;
+  opacity: 0.8;
+}
+#shop .shop-close {
+  margin-top: 4px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+#res {
+  margin-top: 2px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffe1a8;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}

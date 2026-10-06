@@ -375,6 +375,12 @@ export class Sfx {
     this.burst(6000, 0.3, 0.1 * distanceVol);
   }
 
+  /** Удар по дереву: глухой «тук» */
+  chop(): void {
+    this.tone(160, 0.08, 0.2, 0.7);
+    this.burst(900, 0.05, 0.1);
+  }
+
   /** Взмах меча: свист воздуха */
   swing(power = 1): void {
     this.burst(1800, 0.14, 0.12 * power, "bandpass");

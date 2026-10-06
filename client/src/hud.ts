@@ -26,6 +26,7 @@ export class Hud {
   private teamSnakes = document.querySelector<HTMLElement>("#teams .t-snakes b")!;
   private timer = $("timer");
   private bombsEl = $("bombs");
+  private resEl = $("res");
   private capture = $("capture");
   private captureLabel = document.querySelector<HTMLElement>("#capture .cap-label")!;
   private captureFill = document.querySelector<HTMLElement>("#capture .cap-bar i")!;
@@ -71,7 +72,7 @@ export class Hud {
     apply();
   }
 
-  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; bombs: { weak: number; strong: number; boom: number; frost: number }; domeLeft: number; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; res: { wood: number; leather: number }; bombs: { weak: number; strong: number; boom: number; frost: number }; domeLeft: number; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
     const hp = Math.ceil(s.hp);
     this.set("hp", hp, () => {
       this.hpNum.textContent = String(hp);
@@ -88,6 +89,9 @@ export class Hud {
     this.set("bombs", bombsText, () => {
       const dome = s.domeLeft > 0 ? `<span class="dome-on">Купол: ${Math.ceil(s.domeLeft)} с</span> · ` : "";
       this.bombsEl.innerHTML = `${dome}Купол ${s.bombs.weak}+${s.bombs.strong} · 💥 ${s.bombs.boom} · 🧊 ${s.bombs.frost}`;
+    });
+    this.set("res", `${s.res.wood}|${s.res.leather}`, () => {
+      this.resEl.textContent = s.res.wood || s.res.leather ? `🪵 ${s.res.wood} · 🟫 ${s.res.leather}` : "";
     });
     this.set("owned", s.owned.join(","), () => {
       this.slots.forEach((el, i) => (el.style.display = s.owned.includes(WEAPON_ORDER[i]) ? "" : "none"));
