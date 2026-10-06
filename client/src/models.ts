@@ -25,7 +25,6 @@ export const NATURE = [
   "tree_pineDefaultA",
   "tree_pineRoundC",
   "plant_bushLarge",
-  "plant_bushDetailed",
   "stone_largeA",
   "stone_largeC",
   "stone_tallB",

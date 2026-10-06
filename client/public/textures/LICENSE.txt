@@ -1,0 +1,3 @@
+Textures from Poly Haven (https://polyhaven.com), CC0 1.0 Universal (public domain).
+Diffuse maps, 1k JPG: leafy_grass, dirt_floor, withered_grass, weathered_planks, brown_planks_05,
+clay_roof_tiles_02, grey_roof_tiles, reed_roof_04, forest_ground_04.

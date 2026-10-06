@@ -11,6 +11,7 @@ import {
   Texture,
   TransformNode,
   Vector3,
+  VertexBuffer,
   VertexData,
 } from "@babylonjs/core";
 import { CLANS, type ClanId } from "@clan-battle/shared";
@@ -51,6 +52,56 @@ function tag(m: Mesh | InstancedMesh, kind: HitKind, collide: boolean): void {
   m.checkCollisions = collide;
 }
 
+/**
+ * UV по мировой проекции (как «кубическая» развёртка): текстура ложится с одинаковым масштабом
+ * на любые куски стен, полов и крыш, без растяжения по граням.
+ * @param tile сколько метров на один повтор текстуры
+ */
+function projectUV(mesh: Mesh, tile: number): void {
+  const pos = mesh.getVerticesData(VertexBuffer.PositionKind);
+  const nrm = mesh.getVerticesData(VertexBuffer.NormalKind);
+  if (!pos || !nrm) return;
+  const uv = new Float32Array((pos.length / 3) * 2);
+  for (let i = 0, j = 0; i < pos.length; i += 3, j += 2) {
+    const ax = Math.abs(nrm[i]);
+    const ay = Math.abs(nrm[i + 1]);
+    const az = Math.abs(nrm[i + 2]);
+    let u: number;
+    let v: number;
+    if (ay >= ax && ay >= az) {
+      u = pos[i];
+      v = pos[i + 2];
+    } else if (ax >= az) {
+      u = pos[i + 2];
+      v = pos[i + 1];
+    } else {
+      u = pos[i];
+      v = pos[i + 1];
+    }
+    uv[j] = u / tile;
+    uv[j + 1] = v / tile;
+  }
+  mesh.setVerticesData(VertexBuffer.UVKind, uv, false);
+}
+
+const photoMats = new Map<string, StandardMaterial>();
+
+/** Материал с фото-текстурой Poly Haven (CC0, 512 px), общий на всю сцену */
+function photoMat(scene: Scene, file: string, tint = "#ffffff"): StandardMaterial {
+  const key = `${file}|${tint}`;
+  let m = photoMats.get(key);
+  if (!m || m.getScene() !== scene) {
+    m = new StandardMaterial(`photo_${key}`, scene);
+    const t = new Texture(`./textures/${file}.jpg`, scene);
+    t.anisotropicFilteringLevel = 4;
+    m.diffuseTexture = t;
+    m.diffuseColor = Color3.FromHexString(tint);
+    m.specularColor.set(0.04, 0.04, 0.04);
+    photoMats.set(key, m);
+  }
+  return m;
+}
+
 export class World {
   readonly obstacles: Rect[] = [];
   readonly covers: CoverSpot[] = [];
@@ -69,11 +120,13 @@ export class World {
   private mConcrete: StandardMaterial;
 
   constructor(private scene: Scene, detail = 1) {
-    this.mWood = this.woodMat("wood", "#a8743f");
-    this.mWood2 = this.woodMat("wood2", "#8d5b33");
+    // Старые процедурные доски брали 16 чисел из генератора карты — сохраняем раскладку
+    for (let i = 0; i < 16; i++) this.rng();
+    this.mWood = photoMat(scene, "weathered_planks");
+    this.mWood2 = photoMat(scene, "brown_planks_05");
     this.mWoodDark = flatMat(scene, "#5c3b22");
-    this.mRoof = flatMat(scene, "#9c3b2b");
-    this.mRoof2 = flatMat(scene, "#4f5d6b");
+    this.mRoof = photoMat(scene, "clay_roof_tiles_02");
+    this.mRoof2 = photoMat(scene, "grey_roof_tiles");
     this.mConcrete = flatMat(scene, "#8b8f94");
 
     this.buildGround();
@@ -98,29 +151,6 @@ export class World {
 
   // ---------- Материалы ----------
 
-  private woodMat(name: string, hex: string): StandardMaterial {
-    const tex = new DynamicTexture(`${name}_tex`, { width: 128, height: 128 }, this.scene, true);
-    const ctx = tex.getContext() as CanvasRenderingContext2D;
-    const base = Color3.FromHexString(hex);
-    ctx.fillStyle = hex;
-    ctx.fillRect(0, 0, 128, 128);
-    // Доски
-    for (let i = 0; i < 8; i++) {
-      const k = 0.85 + this.rng() * 0.25;
-      ctx.fillStyle = base.scale(k).toHexString();
-      ctx.fillRect(0, i * 16 + 1, 128, 14);
-      ctx.fillStyle = "rgba(40,20,5,0.55)";
-      ctx.fillRect(0, i * 16 + 15, 128, 2);
-    }
-    tex.update();
-    tex.wrapU = Texture.WRAP_ADDRESSMODE;
-    tex.wrapV = Texture.WRAP_ADDRESSMODE;
-    const m = new StandardMaterial(name, this.scene);
-    m.diffuseTexture = tex;
-    m.specularColor = new Color3(0.05, 0.05, 0.05);
-    return m;
-  }
-
   private register(m: Mesh | InstancedMesh, kind: HitKind | null, collide: boolean, shadow = false): void {
     if (kind) tag(m, kind, collide);
     else {
@@ -136,30 +166,17 @@ export class World {
   private buildGround(): void {
     const size = MAP_HALF * 2 + 60;
     const ground = MeshBuilder.CreateGround("ground", { width: size, height: size, subdivisions: 1 }, this.scene);
-    const tex = new DynamicTexture("grass_tex", { width: 256, height: 256 }, this.scene, true);
-    const ctx = tex.getContext() as CanvasRenderingContext2D;
-    ctx.fillStyle = "#5f9a3c";
-    ctx.fillRect(0, 0, 256, 256);
-    const shades = ["#56903a", "#6aa645", "#4f8636", "#74ad4c", "#5a9440"];
-    for (let i = 0; i < 1400; i++) {
-      ctx.fillStyle = shades[i % shades.length];
-      const x = this.rng() * 256;
-      const y = this.rng() * 256;
-      ctx.fillRect(x, y, 2 + this.rng() * 5, 2 + this.rng() * 5);
-    }
-    tex.update();
-    tex.uScale = size / 8;
-    tex.vScale = size / 8;
-    const m = new StandardMaterial("grass", this.scene);
-    m.diffuseTexture = tex;
-    m.specularColor = Color3.Black();
-    ground.material = m;
+    // Раньше тут рисовалась процедурная текстура травы на этом же генераторе;
+    // прокручиваем его столько же раз, чтобы раскладка карты не съехала
+    for (let i = 0; i < 1400 * 4; i++) this.rng();
+    projectUV(ground, 6);
+    ground.material = photoMat(this.scene, "leafy_grass", "#d8e8c8");
     ground.receiveShadows = true;
     this.register(ground, "world", false);
   }
 
   private buildRoads(): void {
-    const mat = flatMat(this.scene, "#b39467");
+    const mat = photoMat(this.scene, "dirt_floor");
     const roads: Rect[] = [
       { x0: -46, z0: 0, x1: 46, z1: 4 }, // главная улица деревни
       { x0: 1, z0: -34, x1: 5, z1: 34 }, // поперечная
@@ -171,6 +188,7 @@ export class World {
       const d = r.z1 - r.z0;
       const p = MeshBuilder.CreateGround(`road${i}`, { width: w, height: d }, this.scene);
       p.position.set((r.x0 + r.x1) / 2, 0.02 + i * 0.003, (r.z0 + r.z1) / 2);
+      projectUV(p, 4);
       p.material = mat;
       p.receiveShadows = true;
       this.register(p, null, false);
@@ -393,6 +411,7 @@ export class World {
     wall(d - 2 * T, openings[2] ?? [], -w / 2 + T / 2, 0, -Math.PI / 2);
     wall(d - 2 * T, openings[3] ?? [], w / 2 - T / 2, 0, Math.PI / 2);
     const merged = Mesh.MergeMeshes(pieces, true, true)!;
+    projectUV(merged, 2);
     merged.name = name;
     merged.material = mat;
     merged.receiveShadows = true;
@@ -417,6 +436,7 @@ export class World {
     VertexData.ComputeNormals(positions, indices, normals);
     vd.normals = normals;
     vd.applyToMesh(m);
+    projectUV(m, 2);
     return m;
   }
 
@@ -456,6 +476,7 @@ export class World {
       const zc = (d / 2 + 0.5) / 2 - 0.12;
       const yTop = h + ph * (1 - zc / (d / 2));
       slab.position.set(0, yTop + 0.07 / Math.cos(slope), s * zc);
+      projectUV(slab, 2);
       slab.material = roofMat;
       this.register(slab, "world", false, true);
     }
@@ -592,7 +613,8 @@ export class World {
   private placeBush(x: number, z: number): void {
     const s = 0.8 + this.rng() * 0.5;
     const rot = this.rng() * 3;
-    const id: NatureId = this.rngLook() < 0.6 ? "plant_bushLarge" : "plant_bushDetailed";
+    this.rngLook();
+    const id: NatureId = "plant_bushLarge";
     const inst = getModels().nature(id).createInstance(`bush_${x}_${z}`);
     inst.position.set(x, 0, z);
     // Куст ~1.1 м в высоту и ~2.5 м в ширину: за ним можно присесть и спрятаться
@@ -699,13 +721,14 @@ export class World {
   // ---------- Поле с сеном ----------
 
   private hayMat(): StandardMaterial {
-    return flatMat(this.scene, "#d9b44a");
+    return photoMat(this.scene, "reed_roof_04", "#f0d890");
   }
 
   private placeHayRound(x: number, z: number, rot: number): void {
     const c = MeshBuilder.CreateCylinder(`hayR_${x}_${z}`, { diameter: 1.6, height: 1.3, tessellation: 12 }, this.scene);
     c.rotation.set(0, rot, Math.PI / 2);
     c.position.set(x, 0.8, z);
+    projectUV(c, 1.2);
     c.material = this.hayMat();
     c.receiveShadows = true;
     this.register(c, "world", true, true);
@@ -717,12 +740,14 @@ export class World {
     const b = MeshBuilder.CreateBox(`hayS_${x}_${z}`, { width: 2.4, height: 0.9, depth: 1.1 }, this.scene);
     b.rotation.y = rot;
     b.position.set(x, 0.45, z);
-    b.material = flatMat(this.scene, "#e3c35e");
+    projectUV(b, 1.2);
+    b.material = this.hayMat();
     this.register(b, "world", true, true);
     if (this.rng() < 0.5) {
       const top = MeshBuilder.CreateBox(`hayS2_${x}_${z}`, { width: 1.2, height: 0.9, depth: 1.1 }, this.scene);
       top.rotation.y = rot;
       top.position.set(x, 1.35, z);
+      projectUV(top, 1.2);
       top.material = b.material;
       this.register(top, "world", true, true);
     }
@@ -734,7 +759,8 @@ export class World {
     // Поле посветлее
     const field = MeshBuilder.CreateGround("hayField", { width: 44, height: 40 }, this.scene);
     field.position.set(38, 0.012, -38);
-    field.material = flatMat(this.scene, "#a7b04f");
+    projectUV(field, 6);
+    field.material = photoMat(this.scene, "withered_grass");
     field.receiveShadows = true;
     this.register(field, null, false);
     for (let i = 0; i < 20; i++) {
