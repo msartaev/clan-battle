@@ -75,6 +75,14 @@ export const RULES = {
   flagRadius: 6,
   /** Синяя аптечка: сколько здоровья даёт */
   medkitHp: 25,
+  /** Лечебные бомбы: купол бессмертия, сек (слабая / сильная) */
+  domeWeakSec: 30,
+  domeStrongSec: 120,
+  /** Радиус купола, м; под ним лечение в секунду */
+  domeRadius: 3,
+  domeHealPerSec: 6,
+  /** Сколько бомб каждого вида можно носить */
+  maxBombs: 3,
 } as const;
 
 export type WeaponId = "weakPistol" | "strongPistol" | "clanWeapon" | "slingshot";

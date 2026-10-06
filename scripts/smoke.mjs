@@ -399,6 +399,37 @@ const browser = await chromium.launch({
   if (slingTest.weapon !== "slingshot" || slingTest.hp >= slingTest.hp0) errors.push("[desktop] slingshot test: рогатка не ранит");
   await page.evaluate(() => window.__game.resetMatch());
 
+  // Лечебная бомба: купол лечит, не даёт умереть и запрещает стрелять из-под себя
+  const domeTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    const p = g.player;
+    p.collider.position.set(-30, 0, -10);
+    p.hp = 40;
+    p.invulnerableUntil = 0;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    g.input.bomb = "weak";
+    await frames(2);
+    const weakLeft = g.bombs.weak;
+    await frames(20);
+    const hpHealed = p.hp;
+    g["damagePlayer"](500);
+    const aliveUnderDome = p.alive;
+    const ammo0 = p.ammo;
+    g.input.mouseFire = true;
+    await frames(6);
+    g.input.mouseFire = false;
+    return { dome: !!g.dome, weakLeft, hpHealed: Math.round(hpHealed), aliveUnderDome, shotUnderDome: p.ammo !== ammo0 };
+  });
+  console.log("dome test:", domeTest);
+  if (!domeTest.dome || domeTest.weakLeft !== 0 || domeTest.hpHealed <= 40 || !domeTest.aliveUnderDome || domeTest.shotUnderDome)
+    errors.push("[desktop] dome test: купол работает не так");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;

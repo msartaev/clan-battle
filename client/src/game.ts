@@ -1,5 +1,6 @@
 import {
   PhotoDome,
+  StandardMaterial,
   Color3,
   Color4,
   DirectionalLight,
@@ -131,6 +132,10 @@ export class Game {
   };
   private medkits: AmmoChest[] = [];
   readonly animals: Animal[] = [];
+  /** Лечебные бомбы в запасе */
+  bombs = { weak: 1, strong: 0 };
+  /** Активный купол бессмертия (один на игрока) */
+  dome: { mesh: Mesh; center: Vector3; until: number; total: number } | null = null;
   private playerPrey!: Prey;
   private botPrey = new Map<Bot, Prey>();
   private animalTargets = new Map<Animal, Target>();
@@ -416,6 +421,65 @@ export class Game {
     }
   }
 
+  // ---------------- Лечебные бомбы и купол ----------------
+
+  private inDome(): boolean {
+    const d = this.dome;
+    if (!d) return false;
+    const p = this.player.position;
+    return (p.x - d.center.x) ** 2 + (p.z - d.center.z) ** 2 < RULES.domeRadius ** 2;
+  }
+
+  private throwBomb(kind: "weak" | "strong" | "any"): void {
+    const k = kind === "any" ? (this.bombs.weak > 0 ? "weak" : "strong") : kind;
+    if (this.bombs[k] <= 0) {
+      this.hud.message(k === "weak" ? "Нет слабых лечебных бомб" : "Нет сильных лечебных бомб", 1.2, "#ffb347");
+      return;
+    }
+    this.bombs[k]--;
+    this.removeDome();
+    const total = k === "weak" ? RULES.domeWeakSec : RULES.domeStrongSec;
+    const mesh = MeshBuilder.CreateSphere("dome", { diameter: RULES.domeRadius * 2, segments: 24 }, this.scene);
+    const m = new StandardMaterial("domeMat", this.scene);
+    m.diffuseColor = new Color3(0.4, 1, 0.75);
+    m.emissiveColor = new Color3(0.15, 0.5, 0.35);
+    m.specularColor = new Color3(0.8, 1, 0.9);
+    m.alpha = 0.22;
+    m.backFaceCulling = false;
+    mesh.material = m;
+    mesh.isPickable = false;
+    const c = this.player.position.clone();
+    mesh.position.set(c.x, 0, c.z);
+    this.dome = { mesh, center: c, until: this.now + total, total };
+    this.sfx.pickup();
+    this.hud.message(`Купол бессмертия на ${total < 60 ? total + " с" : total / 60 + " мин"} — под ним не стреляют`, 2.2, "#7dffb0");
+  }
+
+  private removeDome(): void {
+    if (!this.dome) return;
+    this.dome.mesh.material?.dispose();
+    this.dome.mesh.dispose();
+    this.dome = null;
+  }
+
+  private updateDome(dt: number): void {
+    const d = this.dome;
+    if (!d) return;
+    const left = d.until - this.now;
+    if (left <= 0) {
+      this.removeDome();
+      this.hud.message("Купол исчез", 1.2, "#ffb347");
+      return;
+    }
+    // Последние 5 секунд купол мигает
+    (d.mesh.material as StandardMaterial).alpha = left < 5 ? 0.12 + 0.12 * Math.abs(Math.sin(this.now * 8)) : 0.22;
+    const p = this.player;
+    if (this.inDome() && p.alive) {
+      p.invulnerableUntil = Math.max(p.invulnerableUntil, this.now + 0.15);
+      p.hp = Math.min(RULES.maxHp, p.hp + RULES.domeHealPerSec * dt);
+    }
+  }
+
   // ---------------- Окна ----------------
 
   /** Стекло разбито: звон, осколки, проём свободен */
@@ -533,6 +597,8 @@ export class Game {
     this.deadTimer = 0;
     this.player.lives = RULES.lives;
     this.player.owned.delete("slingshot");
+    this.bombs = { weak: 1, strong: 0 };
+    this.removeDome();
     this.player.selectWeapon(0);
     this.respawnPlayer();
     this.bots.forEach((b, i) => {
@@ -630,6 +696,7 @@ export class Game {
       this.pickupChests();
       this.pickupMedkits();
       this.tryVault();
+      if (input.bomb) this.throwBomb(input.bomb);
     } else {
       this.prevFire = false;
       if (this.state === "dead") {
@@ -646,6 +713,7 @@ export class Game {
     const ctx = this.botContext();
     for (const b of this.bots) b.update(dt, ctx);
     this.updateAnimals(dt);
+    this.updateDome(dt);
     if (this.state === "playing" || this.state === "dead") this.updateMatch(dt);
 
     this.updateChests();
@@ -664,6 +732,8 @@ export class Game {
       hidden,
       teams: this.teamCounts(),
       owned: [...p.owned],
+      bombs: this.bombs,
+      domeLeft: this.dome ? Math.max(0, this.dome.until - this.now) : 0,
       timeLeft: this.matchLeft,
       capture: this.captureInfo(),
     });
@@ -741,6 +811,11 @@ export class Game {
 
   private tryShoot(fresh: boolean): void {
     const p = this.player;
+    // Из-под купола стрелять нельзя — только прятаться и лечиться (GDD)
+    if (this.inDome()) {
+      if (fresh) this.hud.message("Из-под купола стрелять нельзя", 1.2, "#7dffb0");
+      return;
+    }
     // В подзорную трубу не стреляют — сначала убери её (B)
     if (this.scoped) {
       if (fresh) this.hud.message(this.opts.clan === "dragons" ? "Убери подзорную трубу (B)" : "Убери бинокль (B)", 1.2, "#ffe14a");
@@ -1113,7 +1188,14 @@ export class Game {
         p.ammo = Math.min(RULES.maxAmmo, p.ammo + RULES.chestAmmo);
         this.sfx.pickup();
         // Рогатка «часто попадается в сундуках»: половина шансов, пока её нет
-        if (!p.owned.has("slingshot") && this.rng() < 0.5) {
+        const roll = this.rng();
+        if (this.bombs.weak < RULES.maxBombs && roll > 0.72) {
+          this.bombs.weak++;
+          this.hud.message("Лечебная бомба! (G)", 1.8, "#7dffb0");
+        } else if (this.bombs.strong < RULES.maxBombs && roll > 0.62 && roll <= 0.72) {
+          this.bombs.strong++;
+          this.hud.message("Сильная лечебная бомба! (H)", 1.8, "#7dffb0");
+        } else if (!p.owned.has("slingshot") && this.rng() < 0.5) {
           p.owned.add("slingshot");
           this.hud.message(this.input.isTouch ? "Нашёл рогатку! Кнопка «Оружие»" : "Нашёл рогатку! Клавиша 4", 2.2, "#ffe14a");
         } else {

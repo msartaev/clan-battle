@@ -25,6 +25,7 @@ export class Hud {
   private teamDragons = document.querySelector<HTMLElement>("#teams .t-dragons b")!;
   private teamSnakes = document.querySelector<HTMLElement>("#teams .t-snakes b")!;
   private timer = $("timer");
+  private bombsEl = $("bombs");
   private capture = $("capture");
   private captureLabel = document.querySelector<HTMLElement>("#capture .cap-label")!;
   private captureFill = document.querySelector<HTMLElement>("#capture .cap-bar i")!;
@@ -69,7 +70,7 @@ export class Hud {
     apply();
   }
 
-  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; bombs: { weak: number; strong: number }; domeLeft: number; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
     const hp = Math.ceil(s.hp);
     this.set("hp", hp, () => {
       this.hpNum.textContent = String(hp);
@@ -79,6 +80,11 @@ export class Hud {
     this.set("ammo", s.ammo, () => {
       this.ammo.innerHTML = `<b>${s.ammo}</b> патронов`;
       this.ammo.classList.toggle("empty", s.ammo <= 0);
+    });
+    const bombsText = `${s.bombs.weak}|${s.bombs.strong}|${Math.ceil(s.domeLeft)}`;
+    this.set("bombs", bombsText, () => {
+      const dome = s.domeLeft > 0 ? `<span class="dome-on">Купол: ${Math.ceil(s.domeLeft)} с</span> · ` : "";
+      this.bombsEl.innerHTML = `${dome}Лечебные бомбы: ${s.bombs.weak} слаб. · ${s.bombs.strong} сильн.`;
     });
     this.set("owned", s.owned.join(","), () => {
       this.slots.forEach((el, i) => (el.style.display = s.owned.includes(WEAPON_ORDER[i]) ? "" : "none"));
