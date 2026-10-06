@@ -1,5 +1,6 @@
 import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, Vector3 } from "@babylonjs/core";
 import { CLANS, RULES, WEAPONS, type ClanId, type WeaponId } from "@clan-battle/shared";
+import type { Animal } from "./animals";
 import { Humanoid, randomLook } from "./humanoid";
 import { angleDiff, clamp } from "./utils";
 
@@ -9,8 +10,10 @@ export type BotState = "wander" | "chase" | "search" | "dead";
 export interface Target {
   pos: Vector3;
   readonly alive: boolean;
-  clan: ClanId;
+  /** null — зверь */
+  clan: ClanId | null;
   bot: Bot | null;
+  animal?: Animal | null;
 }
 
 /** То, что бот знает о мире (даёт Game) */

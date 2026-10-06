@@ -62,6 +62,8 @@ export type BodyId = (typeof BODIES)[number];
 
 export interface Models {
   humans: Record<BodyId, AssetContainer>;
+  /** Животные Quaternius: волк (из него же медведь) и олень (из него лось) */
+  animals: { wolf: AssetContainer; stag: AssetContainer };
   /** Плоский материал части тела; цвет из модели или подменённый (одежда в цвет клана) */
   humanMat(body: BodyId, part: string, color?: string): StandardMaterial;
   guns: Record<GunKey, AssetContainer>;
@@ -93,11 +95,14 @@ export async function loadModels(scene: Scene): Promise<Models> {
   const load = (path: string) => LoadAssetContainerAsync(BASE + path, scene);
   const [...rest0] = await Promise.all([
     ...BODIES.map((b) => load(`humans/${b}.glb`)),
+    load("animals/wolf.glb"),
+    load("animals/stag.glb"),
     ...Object.values(GUN_FILES).map((f) => load(`blasters/${f}.glb`)),
     ...NATURE.map((n) => load(`nature/${n}.glb`)),
   ]);
   const humanList = rest0.slice(0, BODIES.length);
-  const rest = rest0.slice(BODIES.length);
+  const [wolf, stag] = rest0.slice(BODIES.length, BODIES.length + 2);
+  const rest = rest0.slice(BODIES.length + 2);
   const gunList = rest.slice(0, Object.keys(GUN_FILES).length);
   const natureList = rest.slice(gunList.length);
   const guns = Object.fromEntries(Object.keys(GUN_FILES).map((k, i) => [k, gunList[i]])) as Record<GunKey, AssetContainer>;
@@ -141,6 +146,7 @@ export async function loadModels(scene: Scene): Promise<Models> {
   const humanMats = new Map<string, StandardMaterial>();
 
   models = {
+    animals: { wolf, stag },
     humans: Object.fromEntries(BODIES.map((b, i) => [b, humanList[i]])) as Record<BodyId, AssetContainer>,
     humanMat(body, part, color) {
       const key = `${body}|${part}|${color ?? ""}`;

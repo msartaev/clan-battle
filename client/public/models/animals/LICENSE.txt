@@ -1,0 +1,4 @@
+Wolf and Stag from "Ultimate Animated Animal Pack" by Quaternius (https://quaternius.com), CC0 1.0.
+Files taken from https://github.com/postojomierz-lang/postojomierz (tatry/public/models/animals),
+which documents them as Quaternius CC0. The bear and the moose in the game are made in code from
+the wolf and the stag (scale and colour).

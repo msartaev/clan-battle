@@ -25,6 +25,7 @@ import {
   type ClanId,
   type WeaponId,
 } from "@clan-battle/shared";
+import { Animal, type Prey } from "./animals";
 import { Bot, type BotContext, type Target } from "./bot";
 import { Effects, Sfx } from "./effects";
 import { Hud } from "./hud";
@@ -127,6 +128,10 @@ export class Game {
     snakes: { by: null, t: 0, startedAt: 0 },
   };
   private medkits: AmmoChest[] = [];
+  readonly animals: Animal[] = [];
+  private playerPrey!: Prey;
+  private botPrey = new Map<Bot, Prey>();
+  private animalTargets = new Map<Animal, Target>();
   onDeath: (livesLeft: number) => void = () => undefined;
   onRespawn: () => void = () => undefined;
 
@@ -236,6 +241,7 @@ export class Game {
 
     this.buildChests();
     this.buildMedkits();
+    this.spawnAnimals();
 
     if (!opts.touch && !opts.lowFx) {
       const sg = new ShadowGenerator(2048, sun);
@@ -399,6 +405,70 @@ export class Game {
     }
   }
 
+  // ---------------- Звери ----------------
+
+  /** Стая волков и медведь в лесу, лоси на лугах */
+  private spawnAnimals(): void {
+    const near = (x: number, z: number) => this.world.randomWalkPoint(this.rng, new Vector3(x, 0, z), 6);
+    const place: [Animal["kind"], number, number][] = [
+      ["wolf", -36, 40],
+      ["wolf", -34, 42],
+      ["wolf", -38, 37],
+      ["bear", -52, 22],
+      ["moose", 40, 30],
+      ["moose", -15, -45],
+    ];
+    for (const [kind, x, z] of place) this.animals.push(new Animal(this.scene, kind, near(x, z)));
+    const p = this.player;
+    const game = this;
+    this.playerPrey = {
+      pos: p.position,
+      get alive() {
+        return p.alive && game.state === "playing";
+      },
+      hurt: (dmg) => this.damagePlayer(dmg),
+    };
+  }
+
+  private preyOf(b: Bot): Prey {
+    let pr = this.botPrey.get(b);
+    if (!pr) {
+      pr = {
+        pos: b.position,
+        get alive() {
+          return b.alive;
+        },
+        hurt: (dmg, from) => b.takeDamage(dmg, from, this.now),
+      };
+      this.botPrey.set(b, pr);
+    }
+    return pr;
+  }
+
+  private animalTarget(a: Animal): Target {
+    let t = this.animalTargets.get(a);
+    if (!t) {
+      t = {
+        pos: a.pos,
+        get alive() {
+          return a.alive;
+        },
+        clan: null,
+        bot: null,
+        animal: a,
+      };
+      this.animalTargets.set(a, t);
+    }
+    return t;
+  }
+
+  private updateAnimals(dt: number): void {
+    const prey: Prey[] = [this.playerPrey, ...this.bots.map((b) => this.preyOf(b))];
+    const walkPoint = (near: Vector3, r: number) => this.world.randomWalkPoint(Math.random, near, r);
+    const walkable = (x: number, z: number) => this.world.isWalkable(x, z);
+    for (const a of this.animals) a.update(dt, this.now, prey, walkPoint, walkable);
+  }
+
   // ---------------- Матч ----------------
 
   resetMatch(): void {
@@ -425,6 +495,7 @@ export class Game {
       m.active = true;
       m.mesh.setEnabled(true);
     }
+    for (const a of this.animals) a.spawn(a.pos.clone());
     for (const c of this.chests) {
       c.active = true;
       c.mesh.setEnabled(true);
@@ -522,6 +593,7 @@ export class Game {
 
     const ctx = this.botContext();
     for (const b of this.bots) b.update(dt, ctx);
+    this.updateAnimals(dt);
     if (this.state === "playing" || this.state === "dead") this.updateMatch(dt);
 
     this.updateChests();
@@ -660,12 +732,30 @@ export class Game {
         target = b;
       }
     }
+    let beast: Animal | null = null;
+    for (const a of this.animals) {
+      if (!a.alive) continue;
+      const ap = a.pos;
+      const r = rayVsVerticalSegment(origin, dir, maxT, ap.x, ap.y + 0.15, ap.y + a.info.height, ap.z);
+      if (r.dist < a.info.radius && r.t < maxT) {
+        maxT = r.t;
+        target = null;
+        beast = a;
+      }
+    }
     const end = origin.add(dir.scale(maxT));
     const muzzle = this.firstPerson ? this.vmMuzzle.getAbsolutePosition().clone() : p.humanoid.getMuzzlePosition();
     this.vmKick = 1;
     p.pitch -= p.weapon === "strongPistol" ? 0.018 : 0.006;
 
     const apply = () => {
+      if (beast && beast.alive) {
+        const killed = beast.takeDamage(WEAPONS[p.weapon].damage, this.playerPrey, this.now);
+        this.hud.hit(killed);
+        if (killed) this.hud.message(`${beast.info.name} повержен`, 1.4, "#ffe14a");
+        this.effects.impact(end, true);
+        return;
+      }
       if (target && target.alive && Vector3.Distance(target.position.add(new Vector3(0, 1, 0)), end) < 2.2) {
         this.damageBot(target, computeDamage(p.weapon, p.clan, target.clan));
         this.effects.impact(end, true);
@@ -772,7 +862,7 @@ export class Game {
       if (cap.by) {
         cap.t += dt / RULES.flagCaptureSec;
         if (cap.t >= 1) {
-          this.endMatch(cap.by.clan, `Флаг клана ${CLANS[owner].name} захвачен!`);
+          this.endMatch(cap.by.clan!, `Флаг клана ${CLANS[owner].name} захвачен!`);
           return;
         }
       }
@@ -830,6 +920,11 @@ export class Game {
 
   /** Ближайший видимый враг: проверяем лучом не больше трёх ближайших, чтобы не тратить кадр */
   private findTarget(b: Bot): Target | null {
+    // Зверь, который бросился на этого бота, — первая цель: бот отстреливается
+    const mine = this.preyOf(b);
+    for (const a of this.animals) {
+      if (a.alive && a.target === mine && Vector3.DistanceSquared(a.pos, b.position) < 25 * 25) return this.animalTarget(a);
+    }
     const cands = this.enemiesOf(b.clan)
       .filter((t) => t.alive)
       .map((t) => ({ t, d: Vector3.DistanceSquared(t.pos, b.position) }))
@@ -873,29 +968,33 @@ export class Game {
     const w = WEAPONS[b.weapon];
     const origin = b.humanoid.getMuzzlePosition();
     const victim = t.bot;
-    const isPlayer = !victim;
+    const beast = t.animal ?? null;
+    const isPlayer = !victim && !beast;
     const crouch = isPlayer && p.crouching;
-    const chest = t.pos.add(new Vector3(0, crouch ? 0.7 : 1.15, 0));
+    const chest = t.pos.add(new Vector3(0, beast ? beast.info.height * 0.6 : crouch ? 0.7 : 1.15, 0));
     const toChest = chest.subtract(origin);
     const dist = toChest.length();
     const aim = toChest.scale(1 / dist);
     // Боты специально мажут: сильнее, если цель бежит или далеко; друг по другу — ещё сильнее, чтобы бой длился
-    const speed = isPlayer ? p.speed : victim!.speed;
+    const speed = isPlayer ? p.speed : victim ? victim.speed : 3;
     const spread = (isPlayer ? 0.04 : 0.07) + (speed > 4 ? 0.05 : speed > 0.5 ? 0.025 : 0) + Math.min(0.03, dist * 0.0008);
     const dir = applySpread(aim, spread);
     const wHit = this.scene.pickWithRay(new Ray(origin, dir, w.range), isWorld, false);
     let maxT = wHit?.hit ? wHit.distance : w.range;
-    const top = isPlayer ? p.topHeight - 0.05 : 1.62;
+    const top = isPlayer ? p.topHeight - 0.05 : beast ? beast.info.height : 1.62;
     const r = rayVsVerticalSegment(origin, dir, maxT, t.pos.x, t.pos.y + 0.15, t.pos.y + top, t.pos.z);
-    const hit = r.dist < 0.34 && r.t < maxT;
+    const hit = r.dist < (beast ? beast.info.radius : 0.34) && r.t < maxT;
     if (hit) maxT = r.t;
     const end = origin.add(dir.scale(maxT));
     const vol = clamp(1 - Vector3.Distance(origin, p.position) / 70, 0.1, 0.8);
     this.sfx.shot(b.weapon, vol);
 
     const apply = () => {
-      if (hit && t.alive) {
-        const dmg = computeDamage(b.weapon, b.clan, t.clan);
+      if (hit && t.alive && beast) {
+        beast.takeDamage(WEAPONS[b.weapon].damage, this.preyOf(b), this.now);
+        this.effects.impact(end, true);
+      } else if (hit && t.alive) {
+        const dmg = computeDamage(b.weapon, b.clan, t.clan!);
         if (isPlayer) {
           if (this.state === "playing") this.damagePlayer(dmg);
         } else if (victim!.takeDamage(dmg, b.position.clone(), this.now)) {

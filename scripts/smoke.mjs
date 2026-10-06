@@ -272,6 +272,46 @@ const browser = await chromium.launch({
   if (!flagTest.won) errors.push("[desktop] flag test: захват флага не дал победу");
   await page.evaluate(() => window.__game.resetMatch());
 
+  // Звери: волк сам нападает на игрока; выстрелы его ранят
+  const animalTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    g.player.invulnerableUntil = 0;
+    g.player.hp = 100;
+    g.bots.forEach((b) => b.spawn(b.position.clone().set(0, 0, 60), 0));
+    const wolf = g.animals.find((a) => a.kind === "wolf");
+    g.player.collider.position.set(-20, 0, 20);
+    wolf.spawn(new g.player.collider.position.constructor(-20, 0, 26));
+    let u = g.engine.frameId + 150;
+    while (g.engine.frameId < u && g.player.hp >= 100) await new Promise((r) => setTimeout(r, 20));
+    const hpAfterBite = g.player.hp;
+    // Волк замирает в 6 м, игрок целится ему в бок от первого лица
+    const V = g.player.collider.position.constructor;
+    wolf.root.position.set(-20, 0, 26);
+    wolf.update = () => {};
+    g.setFirstPerson(true);
+    const d = wolf.pos.subtract(g.player.position);
+    g.player.yaw = Math.atan2(d.x, d.z);
+    g.player.pitch = Math.atan2(g.player.eyeHeight - 0.5, Math.hypot(d.x, d.z));
+    u = g.engine.frameId + 3;
+    while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    g.player.selectWeapon(1);
+    g.player.ammo = 50;
+    const wolfHp0 = wolf.hp;
+    g.input.mouseFire = true;
+    u = g.engine.frameId + 25;
+    while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    g.input.mouseFire = false;
+    g.setFirstPerson(false);
+    delete wolf.update;
+    return { animals: g.animals.map((a) => a.kind).join(","), hpAfterBite, wolfHp0, wolfHp: wolf.hp, wolfTarget: !!wolf.target };
+  });
+  console.log("animal test:", animalTest);
+  if (animalTest.hpAfterBite >= 100) errors.push("[desktop] animal test: волк не напал");
+  if (animalTest.wolfHp >= animalTest.wolfHp0) errors.push("[desktop] animal test: выстрелы не ранили волка");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;
