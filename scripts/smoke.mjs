@@ -430,6 +430,29 @@ const browser = await chromium.launch({
     errors.push("[desktop] dome test: купол работает не так");
   await page.evaluate(() => window.__game.resetMatch());
 
+  // Подвал: в комнате стоим на его полу (-2.6), из люка по верхней ступеньке выходим на пол дома
+  const cellarTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    const p = g.player;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    p.collider.position.set(-16, -2.5, 8.5);
+    await frames(6);
+    const roomY = +p.position.y.toFixed(2);
+    // Верхняя ступенька у восточного края люка
+    p.collider.position.set(-11.45, 0.05, 10.2);
+    await frames(4);
+    const topStepY = +p.position.y.toFixed(2);
+    return { roomY, topStepY };
+  });
+  console.log("cellar test:", cellarTest);
+  if (Math.abs(cellarTest.roomY + 2.6) > 0.1 || cellarTest.topStepY < -0.1) errors.push("[desktop] cellar test: пол подвала или ступеньки не работают");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;

@@ -53,6 +53,21 @@ export interface BaseInfo {
 
 export const MAP_HALF = 64;
 
+/**
+ * Подвал под домом №3 на главной улице (дом в (-14, 9)): люк в полу и комната под землёй.
+ * Вниз — по ступенькам, вверх — прыжками со ступеньки на ступеньку, как в Майнкрафте.
+ */
+export const CELLAR = {
+  room: { x0: -17.4, x1: -10.6, z0: 6.6, z1: 11.4 },
+  // Проём над всей лестницей, иначе со ступенек «выталкивает» на пол дома
+  hole: { x0: -14.6, x1: -11.2, z0: 9.6, z1: 10.8 },
+  floor: -2.6,
+  house: 3,
+};
+
+const inRect = (r: { x0: number; x1: number; z0: number; z1: number }, x: number, z: number, m = 0) =>
+  x > r.x0 - m && x < r.x1 + m && z > r.z0 - m && z < r.z1 + m;
+
 /** Стекло в окне: целое не пускает и останавливает пули, разбитое — можно залезть */
 export interface WindowPane {
   mesh: Mesh;
@@ -193,7 +208,23 @@ export class World {
 
   private buildGround(): void {
     const size = MAP_HALF * 2 + 60;
-    const ground = MeshBuilder.CreateGround("ground", { width: size, height: size, subdivisions: 1 }, this.scene);
+    // Земля из четырёх кусков вокруг люка подвала — иначе сквозь неё не спуститься и не увидеть подвал
+    const H = size / 2;
+    const h = CELLAR.hole;
+    const pieces: [number, number, number, number][] = [
+      [-H, H, -H, h.z0],
+      [-H, H, h.z1, H],
+      [-H, h.x0, h.z0, h.z1],
+      [h.x1, H, h.z0, h.z1],
+    ];
+    const parts = pieces.map(([x0, x1, z0, z1], k) => {
+      const g = MeshBuilder.CreateGround(`ground${k}`, { width: x1 - x0, height: z1 - z0 }, this.scene);
+      g.position.set((x0 + x1) / 2, 0, (z0 + z1) / 2);
+      g.bakeCurrentTransformIntoVertices();
+      return g;
+    });
+    const ground = Mesh.MergeMeshes(parts, true, true)!;
+    ground.name = "ground";
     // Раньше тут рисовалась процедурная текстура травы на этом же генераторе;
     // прокручиваем его столько же раз, чтобы раскладка карты не съехала
     for (let i = 0; i < 1400 * 4; i++) this.rng();
@@ -469,6 +500,73 @@ export class World {
     return merged;
   }
 
+  /** Пол дома с люком, сам подвал и ступеньки. Дом подвала не повёрнут (rotY = 0) */
+  private buildCellar(_root: TransformNode, hx: number, hz: number, w: number, d: number): void {
+    const h = CELLAR.hole;
+    const r = CELLAR.room;
+    const F = CELLAR.floor;
+    const wood = this.mWoodDark;
+    const box = (name: string, x0: number, x1: number, y0: number, y1: number, z0: number, z1: number, mat: StandardMaterial, kind: HitKind | null, collide: boolean) => {
+      const b = MeshBuilder.CreateBox(name, { width: x1 - x0, height: y1 - y0, depth: z1 - z0 }, this.scene);
+      b.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+      b.material = mat;
+      projectUV(b, 2);
+      b.receiveShadows = true;
+      this.register(b, kind, collide);
+      return b;
+    };
+    // Пол дома: четыре доски вокруг люка (в мировых координатах)
+    const fx0 = hx - w / 2 + 0.2;
+    const fx1 = hx + w / 2 - 0.2;
+    const fz0 = hz - d / 2 + 0.2;
+    const fz1 = hz + d / 2 - 0.2;
+    box("cellarFloorA", fx0, fx1, 0.0, 0.04, fz0, h.z0, wood, null, false);
+    box("cellarFloorB", fx0, fx1, 0.0, 0.04, h.z1, fz1, wood, null, false);
+    box("cellarFloorC", fx0, h.x0, 0.0, 0.04, h.z0, h.z1, wood, null, false);
+    box("cellarFloorD", h.x1, fx1, 0.0, 0.04, h.z0, h.z1, wood, null, false);
+    // Откинутая крышка люка у края
+    const lid = MeshBuilder.CreateBox("cellarLid", { width: 1.2, height: 0.06, depth: 1.2 }, this.scene);
+    lid.position.set(h.x0 - 0.05, 0.6, (h.z0 + h.z1) / 2);
+    lid.rotation.z = Math.PI / 2 - 0.25;
+    lid.material = this.mWood2;
+    this.register(lid, null, false);
+
+    // Комната: бетон и доски
+    const wall = this.mConcrete;
+    box("cellarFloor", r.x0, r.x1, F - 0.1, F, r.z0, r.z1, wood, "world", true);
+    // Потолок под землёй — со дна виден, с вырезом под люк
+    box("cellarCeilA", r.x0, r.x1, -0.12, -0.02, r.z0, h.z0, wall, "world", true);
+    box("cellarCeilB", r.x0, r.x1, -0.12, -0.02, h.z1, r.z1, wall, "world", true);
+    box("cellarCeilC", r.x0, h.x0, -0.12, -0.02, h.z0, h.z1, wall, "world", true);
+    box("cellarCeilD", h.x1, r.x1, -0.12, -0.02, h.z0, h.z1, wall, "world", true);
+    box("cellarWallN", r.x0 - 0.2, r.x1 + 0.2, F, 0, r.z1, r.z1 + 0.2, wall, "world", true);
+    box("cellarWallS", r.x0 - 0.2, r.x1 + 0.2, F, 0, r.z0 - 0.2, r.z0, wall, "world", true);
+    box("cellarWallW", r.x0 - 0.2, r.x0, F, 0, r.z0, r.z1, wall, "world", true);
+    box("cellarWallE", r.x1, r.x1 + 0.2, F, 0, r.z0, r.z1, wall, "world", true);
+    // Стенки шахты люка между полом дома и потолком подвала не нужны: потолок и есть земля
+    // Ступеньки: самая верхняя прямо под люком, ниже — к западу; высота 0.43 м — только прыжком
+    const steps = 6;
+    const rise = (0 - F) / steps;
+    const zc0 = h.z0 + 0.1;
+    const zc1 = h.z1 - 0.1;
+    for (let k = 1; k <= steps; k++) {
+      const top = F + rise * k - 0.02;
+      // Верхняя ступенька упирается в восточный край люка — с неё сразу шаг на пол дома
+      const xc = h.x1 - 0.24 - (steps - k) * 0.48;
+      box(`cellarStep${k}`, xc - 0.24, xc + 0.24, F, top, zc0, zc1, wood, "world", true);
+    }
+    // Ящики и бочка — укрытия внутри
+    box("cellarCrateA", r.x0 + 0.3, r.x0 + 1.3, F, F + 0.9, r.z0 + 0.3, r.z0 + 1.3, this.mWood2, "world", true);
+    box("cellarCrateB", r.x0 + 0.3, r.x0 + 1.0, F, F + 0.7, r.z0 + 1.5, r.z0 + 2.2, this.mWood, "world", true);
+  }
+
+  /** Высота пола под точкой: в подвале — его пол, иначе земля */
+  floorAt(x: number, z: number, y: number): number {
+    // Под землёй или прямо над люком — пол подвала
+    if (inRect(CELLAR.room, x, z) && (y < -0.15 || inRect(CELLAR.hole, x, z))) return CELLAR.floor;
+    return 0;
+  }
+
   /** Стёкла во все окна дома или бункера (root — его корень) */
   private glaze(prefix: string, root: TransformNode, specs: WindowSpec[], extraRotY = 0, offset = Vector3.Zero()): void {
     if (!this.glassMat) {
@@ -588,12 +686,16 @@ export class World {
       slab.material = roofMat;
       this.register(slab, "world", false, true);
     }
-    // Пол
-    const floor = MeshBuilder.CreateGround(`floor${i}`, { width: w - 0.4, height: d - 0.4 }, this.scene);
-    floor.parent = root;
-    floor.position.y = 0.03;
-    floor.material = this.mWoodDark;
-    this.register(floor, null, false);
+    // Пол (в доме с подвалом — с вырезом под люк)
+    if (i === CELLAR.house) {
+      this.buildCellar(root, x, z, w, d);
+    } else {
+      const floor = MeshBuilder.CreateGround(`floor${i}`, { width: w - 0.4, height: d - 0.4 }, this.scene);
+      floor.parent = root;
+      floor.position.y = 0.03;
+      floor.material = this.mWoodDark;
+      this.register(floor, null, false);
+    }
     // Стол внутри — укрытие у окна
     const table = MeshBuilder.CreateBox(`table${i}`, { width: 1.6, height: 0.8, depth: 0.9 }, this.scene);
     table.parent = root;

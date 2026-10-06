@@ -690,7 +690,7 @@ export class Game {
     this.updateViewmodelWeapon();
 
     if (this.state === "playing") {
-      p.update(dt, input, this.now, () => this.canStand());
+      p.update(dt, input, this.now, () => this.canStand(), (x, z, y) => this.world.floorAt(x, z, y));
       if (input.fire) this.tryShoot(!this.prevFire);
       this.prevFire = input.fire;
       this.pickupChests();
@@ -803,7 +803,7 @@ export class Game {
     if (hit?.hit && hit.distance < d + 0.3) d = Math.max(0.3, hit.distance - 0.3);
     const target = pivot.add(back.scale(d));
     // Камера не уходит под землю
-    target.y = Math.max(target.y, 0.3);
+    target.y = Math.max(target.y, this.world.floorAt(p.position.x, p.position.z, p.position.y) + 0.3);
     cam.position.copyFrom(target);
   }
 

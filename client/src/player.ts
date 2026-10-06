@@ -76,7 +76,7 @@ export class Player {
     this.syncHumanoid(0);
   }
 
-  update(dt: number, input: Input, now: number, canStand: () => boolean): void {
+  update(dt: number, input: Input, now: number, canStand: () => boolean, floorAt: (x: number, z: number, y: number) => number = () => 0): void {
     if (!this.alive) return;
 
     // Поворот
@@ -129,9 +129,11 @@ export class Player {
     } else {
       this.grounded = false;
     }
-    // Земля
-    if (this.collider.position.y <= 0) {
-      this.collider.position.y = 0;
+    // Земля (или пол подвала)
+    const pos = this.collider.position;
+    const floor = floorAt(pos.x, pos.z, pos.y);
+    if (pos.y <= floor) {
+      pos.y = floor;
       this.vy = 0;
       this.grounded = true;
     }
