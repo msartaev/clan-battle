@@ -898,3 +898,33 @@ body.touch #bombs {
 #btn-bomb {
   right: calc(max(14px, env(safe-area-inset-right)) + 372px);
 }
+
+/* Кнопка «Машина» видна, только когда рядом машина или ты за рулём */
+#btn-car {
+  left: calc(max(28px, env(safe-area-inset-left)) + 150px);
+  bottom: 130px;
+  width: 78px;
+  height: 46px;
+  border-radius: 23px;
+  font-size: 14px;
+  display: none;
+}
+body.near-car #btn-car {
+  display: block;
+}
+#car-hint {
+  position: absolute;
+  bottom: 120px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  display: none;
+}
+body.near-car #car-hint {
+  display: block;
+}
+body.touch #car-hint {
+  display: none;
+}

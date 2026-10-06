@@ -533,6 +533,47 @@ const browser = await chromium.launch({
     errors.push("[desktop] bomb test: боевые бомбы работают не так");
   await page.evaluate(() => window.__game.resetMatch());
 
+  // Машина: сесть (E), проехать вперёд, выйти
+  const carTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    const p = g.player;
+    const car = g.world.cars[0];
+    const c = car.mesh.position;
+    p.collider.position.set(c.x + 1.5, 0, c.z + 1.5);
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    await frames(2);
+    g.input.use = true;
+    await frames(2);
+    const inCar = !!g.driving;
+    return { inCar, x0: +c.x.toFixed(2), z0: +c.z.toFixed(2) };
+  });
+  await page.keyboard.down("KeyW");
+  await page.evaluate(async () => {
+    const g = window.__game;
+    const u = g.engine.frameId + 30;
+    while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+  });
+  await page.keyboard.up("KeyW");
+  const carAfter = await page.evaluate(async () => {
+    const g = window.__game;
+    const c = g.world.cars[0].mesh.position;
+    const pp = g.player.position;
+    const out = { x: +c.x.toFixed(2), z: +c.z.toFixed(2), playerWithCar: Math.hypot(pp.x - c.x, pp.z - c.z) < 0.5 };
+    g.input.use = true;
+    const u = g.engine.frameId + 3;
+    while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    return { ...out, exited: !g.driving, playerVisible: g.player.humanoid.root.isEnabled() };
+  });
+  console.log("car test:", carTest, carAfter);
+  const drove = Math.hypot(carAfter.x - carTest.x0, carAfter.z - carTest.z0);
+  if (!carTest.inCar || drove < 2 || !carAfter.playerWithCar || !carAfter.exited) errors.push("[desktop] car test: машина не едет или не пускает/не выпускает");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;

@@ -21,6 +21,8 @@ export class Input {
   cameraToggle = false;
   weaponSelect: number | null = null;
   weaponCycle = 0;
+  /** Сесть в машину / выйти (E, кнопка «Машина») */
+  use = false;
   /** Подзорная труба / бинокль: включить или выключить */
   scopeToggle = false;
   /**
@@ -82,6 +84,7 @@ export class Input {
     this.weaponCycle = 0;
     this.scopeToggle = false;
     this.bomb = null;
+    this.use = false;
   }
 
   reset(): void {
@@ -117,6 +120,7 @@ export class Input {
       if (e.code === "KeyG") this.bomb = "weak";
       if (e.code === "KeyH") this.bomb = "strong";
       if (e.code === "KeyF") this.bomb = "boom";
+      if (e.code === "KeyE") this.use = true;
       if (e.code === "KeyR") this.bomb = "frost";
       const m = /^Digit([1-9])$/.exec(e.code);
       if (m) this.weaponSelect = Number(m[1]) - 1;
@@ -323,6 +327,7 @@ export class Input {
     btn("btn-scope", () => (this.scopeToggle = true));
     btn("btn-dome", () => (this.bomb = "any"));
     btn("btn-bomb", () => (this.bomb = "combat"));
+    btn("btn-car", () => (this.use = true));
     btn("btn-weapon", () => (this.weaponCycle = 1));
     root.classList.add("on");
   }

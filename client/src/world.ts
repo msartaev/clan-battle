@@ -145,6 +145,8 @@ function photoMat(scene: Scene, file: string, tint = "#ffffff"): StandardMateria
 
 export class World {
   readonly windows: WindowPane[] = [];
+  /** Машины деревни: на них можно ездить */
+  readonly cars: { mesh: Mesh; yaw: number; home: Vector3; homeYaw: number }[] = [];
   private glassMat: StandardMaterial | null = null;
   readonly obstacles: Rect[] = [];
   readonly covers: CoverSpot[] = [];
@@ -718,6 +720,11 @@ export class World {
     car.computeWorldMatrix(true);
     car.receiveShadows = true;
     this.register(car, "world", true, true);
+    // Ездит: коллизии — эллипсоид по размеру кузова
+    car.ellipsoid = new Vector3(1.3, 0.75, 1.3);
+    car.ellipsoidOffset = new Vector3(0, 0.75, 0);
+    this.staticMeshes.splice(this.staticMeshes.indexOf(car), 1);
+    this.cars.push({ mesh: car, yaw: rotY, home: car.position.clone(), homeYaw: rotY });
     this.covers.push({ x, z, r: 2.6 });
     this.obstacles.push({ x0: x - 2.6, z0: z - 2.6, x1: x + 2.6, z1: z + 2.6 });
   }

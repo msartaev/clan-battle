@@ -37,7 +37,7 @@ import { getModels, gunKey, loadModels, slingshotMesh, swordMesh } from "./model
 import type { Input } from "./input";
 import { Player } from "./player";
 import { applySpread, clamp, dirFromYawPitch, makeRng, rayVsVerticalSegment } from "./utils";
-import { type WindowPane, World } from "./world";
+import { MAP_HALF, type WindowPane, World } from "./world";
 
 export interface GameOptions {
   clan: ClanId;
@@ -134,6 +134,10 @@ export class Game {
   };
   private medkits: AmmoChest[] = [];
   readonly animals: Animal[] = [];
+  /** За рулём какой машины (или null) */
+  driving: { mesh: Mesh; yaw: number; home: Vector3; homeYaw: number; speed?: number } | null = null;
+  private carSpeed = 0;
+  private ramCooldown = new Map<object, number>();
   /** Замах мечом: когда начали держать кнопку (или -1) */
   private chargeFrom = -1;
   /** Держим меч ровно, как щит */
@@ -439,6 +443,108 @@ export class Game {
         this.hud.message(`+${RULES.medkitHp} здоровья`, 1.2, "#6fd3ff");
         this.sfx.pickup();
       }
+    }
+  }
+
+  // ---------------- Машины ----------------
+
+  private nearestCar(): (typeof this.world.cars)[number] | null {
+    const p = this.player.position;
+    let best: (typeof this.world.cars)[number] | null = null;
+    let bd = 3.2 * 3.2;
+    for (const c of this.world.cars) {
+      const d = (c.mesh.position.x - p.x) ** 2 + (c.mesh.position.z - p.z) ** 2;
+      if (d < bd) {
+        bd = d;
+        best = c;
+      }
+    }
+    return best;
+  }
+
+  private updateCarHint(): void {
+    const near = !!this.driving || !!this.nearestCar();
+    document.body.classList.toggle("near-car", near && this.state === "playing");
+    const hint = document.getElementById("car-hint");
+    if (hint) hint.textContent = this.driving ? "E — выйти из машины" : "E — сесть в машину";
+  }
+
+  private toggleCar(): void {
+    if (this.driving) {
+      this.exitCar();
+      return;
+    }
+    const car = this.nearestCar();
+    if (!car || this.scoped) return;
+    this.driving = car;
+    this.carSpeed = 0;
+    const p = this.player;
+    p.yaw = car.yaw;
+    p.collider.checkCollisions = false;
+    p.humanoid.setEnabled(false);
+    this.viewmodel.setEnabled(false);
+    this.hud.message("За рулём! W — газ, S — тормоз, A/D — руль, E — выйти", 2.4, "#ffffff");
+  }
+
+  private exitCar(): void {
+    const car = this.driving;
+    if (!car) return;
+    this.driving = null;
+    this.carSpeed = 0;
+    const p = this.player;
+    // Выходим у левой двери (или справа, если там стена)
+    const right = new Vector3(Math.cos(car.yaw), 0, -Math.sin(car.yaw));
+    const c = car.mesh.position;
+    let spot = c.add(right.scale(-2.1));
+    if (!this.world.isWalkable(spot.x, spot.z)) spot = c.add(right.scale(2.1));
+    p.collider.position.set(spot.x, 0.05, spot.z);
+    p.collider.checkCollisions = true;
+    p.humanoid.setEnabled(true);
+    this.setFirstPerson(this.firstPerson);
+  }
+
+  private updateCar(dt: number): void {
+    const car = this.driving!;
+    const input = this.input;
+    const p = this.player;
+    // Газ, тормоз/задний ход, трение
+    const throttle = input.moveZ;
+    if (throttle > 0.1) this.carSpeed += 9 * throttle * dt;
+    else if (throttle < -0.1) this.carSpeed += (this.carSpeed > 0.5 ? 16 : 6) * throttle * dt;
+    else this.carSpeed -= Math.sign(this.carSpeed) * Math.min(Math.abs(this.carSpeed), 3 * dt);
+    this.carSpeed = clamp(this.carSpeed, -5, 14);
+    // Руль: поворачивает тем сильнее, чем быстрее едем (на месте не крутится)
+    const steer = input.moveX;
+    const k = clamp(Math.abs(this.carSpeed) / 4, 0, 1);
+    car.yaw += steer * 1.5 * k * Math.sign(this.carSpeed || 1) * dt;
+    car.mesh.rotation.y = car.yaw - Math.PI / 2;
+    // Мышь крутит только камеру вокруг машины, а не руль
+    p.yaw = car.yaw + clamp(p.yaw - car.yaw, -1.2, 1.2) * 0.98;
+    const fwd = new Vector3(Math.sin(car.yaw), 0, Math.cos(car.yaw));
+    const before = car.mesh.position.clone();
+    car.mesh.moveWithCollisions(fwd.scale(this.carSpeed * dt));
+    car.mesh.position.y = 0;
+    const moved = Vector3.Distance(before, car.mesh.position);
+    // Врезались — скорость гаснет
+    if (moved < Math.abs(this.carSpeed) * dt * 0.4) this.carSpeed *= 0.3;
+    const lim = MAP_HALF - 2;
+    car.mesh.position.x = clamp(car.mesh.position.x, -lim, lim);
+    car.mesh.position.z = clamp(car.mesh.position.z, -lim, lim);
+    // Игрок «сидит» в машине: его позиция — для ботов, флага и камеры
+    p.collider.position.set(car.mesh.position.x, 0.05, car.mesh.position.z);
+    // Таран: враг или зверь перед капотом на скорости
+    if (Math.abs(this.carSpeed) > 5) {
+      const front = car.mesh.position.add(fwd.scale(Math.sign(this.carSpeed) * 1.6));
+      const ram = (pos: Vector3, key: object, hurt: (d: number) => void) => {
+        if ((this.ramCooldown.get(key) ?? 0) > this.now) return;
+        if ((pos.x - front.x) ** 2 + (pos.z - front.z) ** 2 > 1.7 * 1.7) return;
+        this.ramCooldown.set(key, this.now + 1);
+        hurt(Math.round(25 + Math.abs(this.carSpeed) * 4));
+        this.sfx.clang();
+        this.carSpeed *= 0.6;
+      };
+      for (const b of this.bots) if (b.alive && b.clan !== p.clan) ram(b.position, b, (d) => this.damageBot(b, d));
+      for (const a of this.animals) if (a.alive) ram(a.pos, a, (d) => a.takeDamage(d, this.playerPrey, this.now));
     }
   }
 
@@ -823,6 +929,12 @@ export class Game {
     }
     for (const a of this.animals) a.spawn(a.pos.clone());
     this.world.repairWindows();
+    if (this.driving) this.exitCar();
+    for (const c of this.world.cars) {
+      c.mesh.position.copyFrom(c.home);
+      c.yaw = c.homeYaw;
+      c.mesh.rotation.y = c.yaw - Math.PI / 2;
+    }
     for (const c of this.chests) {
       c.active = true;
       c.mesh.setEnabled(true);
@@ -904,8 +1016,13 @@ export class Game {
     this.updateViewmodelWeapon();
 
     if (this.state === "playing") {
-      p.update(dt, input, this.now, () => this.canStand(), (x, z, y) => this.world.floorAt(x, z, y));
-      if (p.weapon === "sword") this.updateMelee(input.fire);
+      if (input.use) this.toggleCar();
+      if (this.driving) this.updateCar(dt);
+      else p.update(dt, input, this.now, () => this.canStand(), (x, z, y) => this.world.floorAt(x, z, y));
+      this.updateCarHint();
+      if (this.driving) {
+        if (input.fire && !this.prevFire) this.hud.message("Из машины не стреляют — выйди (E)", 1.2, "#ffb347");
+      } else if (p.weapon === "sword") this.updateMelee(input.fire);
       else if (input.fire) this.tryShoot(!this.prevFire);
       this.prevFire = input.fire;
       this.pickupChests();
@@ -999,6 +1116,16 @@ export class Game {
     cam.fov += (wantFov - cam.fov) * Math.min(1, dt * 12);
     if (this.scoped && this.state !== "dead") {
       cam.position.copyFrom(eye);
+      return;
+    }
+    if (this.driving) {
+      // За рулём: камера сзади-сверху, смотрит по ходу машины с поправкой мышью
+      const c = this.driving.mesh.position;
+      const yaw = this.driving.yaw + (p.yaw - this.driving.yaw);
+      const back = new Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+      const target = c.add(back.scale(7)).add(new Vector3(0, 3.2, 0));
+      cam.position.copyFrom(target);
+      cam.rotation.set(0.28 + p.pitch * 0.3, yaw, 0);
       return;
     }
     if (this.firstPerson && this.state !== "dead") {
@@ -1393,6 +1520,7 @@ export class Game {
     this.hud.damage();
     this.sfx.hurt();
     if (died) {
+      if (this.driving) this.exitCar();
       this.teamKills[enemyClan(p.clan)]++;
       this.state = "dead";
       this.deadTimer = 0;
