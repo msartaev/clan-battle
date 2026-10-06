@@ -10,7 +10,8 @@ const params = new URLSearchParams(location.search);
 const testMode = params.has("test");
 const touch = params.has("touch") || isTouchDevice();
 const lowFx = touch || params.has("low");
-const botCount = Math.max(1, Math.min(12, Number(params.get("bots")) || 7));
+// Размер вражеской команды (союзников на одного меньше — игрок тоже в команде): по умолчанию 5 на 5
+const botCount = Math.max(1, Math.min(8, Number(params.get("bots")) || 5));
 
 document.body.classList.toggle("touch", touch);
 

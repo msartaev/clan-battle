@@ -704,3 +704,93 @@ body.touch #toast {
 body.touch #hud {
   z-index: 22;
 }
+
+/* ----- Счёт команд: сколько бойцов каждого клана сейчас в строю ----- */
+#teams {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 14px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+#teams b {
+  font-size: 22px;
+}
+#teams .t-dragons b {
+  color: #ff8a4a;
+}
+#teams .t-snakes b {
+  color: #7dff6a;
+}
+#teams i {
+  font-style: normal;
+  opacity: 0.7;
+}
+body.touch #teams {
+  top: 40px;
+  font-size: 14px;
+  padding: 2px 10px;
+}
+body.touch #teams b {
+  font-size: 17px;
+}
+
+/* ----- Подзорная труба (Драконы) и бинокль (Змеи) ----- */
+#scope {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: #050505;
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+}
+#scope.hidden {
+  display: none;
+}
+#scope.spyglass {
+  -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 34vmin, #000 35vmin);
+  mask-image: radial-gradient(circle at 50% 50%, transparent 34vmin, #000 35vmin);
+}
+#scope.binoculars {
+  -webkit-mask-image: radial-gradient(circle at calc(50% - 21vmin) 50%, transparent 26vmin, #000 27vmin),
+    radial-gradient(circle at calc(50% + 21vmin) 50%, transparent 26vmin, #000 27vmin);
+  mask-image: radial-gradient(circle at calc(50% - 21vmin) 50%, transparent 26vmin, #000 27vmin),
+    radial-gradient(circle at calc(50% + 21vmin) 50%, transparent 26vmin, #000 27vmin);
+}
+#scope .scope-label {
+  position: absolute;
+  bottom: 6vmin;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  font-weight: 700;
+  font-size: 16px;
+  opacity: 0.85;
+}
+body.scoped #crosshair,
+body.scoped #slots {
+  visibility: hidden;
+}
+
+#btn-scope {
+  right: calc(max(14px, env(safe-area-inset-right)) + 200px);
+}
+#btn-aim {
+  right: calc(max(22px, env(safe-area-inset-right)) + 128px);
+  bottom: 128px;
+  width: 70px;
+  height: 70px;
+  font-size: 14px;
+}
+#btn-aim.toggled {
+  background: rgba(255, 210, 60, 0.55);
+}

@@ -11,6 +11,8 @@ export class Input {
   fire = false;
   sprint = false;
   crouch = false;
+  /** Прицеливание с приближением (держать ПКМ / переключатель на телефоне) */
+  aim = false;
   // Накопленный поворот за кадр, радианы
   lookDX = 0;
   lookDY = 0;
@@ -19,6 +21,8 @@ export class Input {
   cameraToggle = false;
   weaponSelect: number | null = null;
   weaponCycle = 0;
+  /** Подзорная труба / бинокль: включить или выключить */
+  scopeToggle = false;
 
   mouseSensitivity = 0.0022;
   touchSensitivity = 0.0055;
@@ -31,6 +35,8 @@ export class Input {
   private touchSprint = false;
   private touchCrouch = false;
   private touchFire = false;
+  private touchAim = false;
+  private mouseAim = false;
 
   constructor(private canvas: HTMLCanvasElement, isTouch: boolean) {
     this.isTouch = isTouch;
@@ -58,6 +64,7 @@ export class Input {
     this.sprint = this.keys.has("ControlLeft") || this.keys.has("ControlRight") || this.touchSprint;
     this.crouch = this.keys.has("ShiftLeft") || this.keys.has("ShiftRight") || this.touchCrouch;
     this.fire = this.mouseFire || this.touchFire;
+    this.aim = this.mouseAim || this.touchAim;
   }
 
   /** Сбросить одноразовые нажатия после кадра */
@@ -68,6 +75,7 @@ export class Input {
     this.cameraToggle = false;
     this.weaponSelect = null;
     this.weaponCycle = 0;
+    this.scopeToggle = false;
   }
 
   reset(): void {
@@ -77,6 +85,8 @@ export class Input {
     this.touchMove.x = this.touchMove.z = 0;
     this.touchSprint = false;
     this.touchCrouch = false;
+    this.touchAim = false;
+    this.mouseAim = false;
     this.syncToggleButtons();
     this.endFrame();
   }
@@ -97,6 +107,7 @@ export class Input {
       if (e.code === "Space") this.jumpPressed = true;
       if (e.code === "KeyV") this.cameraToggle = true;
       if (e.code === "KeyQ") this.weaponCycle = 1;
+      if (e.code === "KeyB") this.scopeToggle = true;
       const m = /^Digit([1-9])$/.exec(e.code);
       if (m) this.weaponSelect = Number(m[1]) - 1;
     });
@@ -106,13 +117,16 @@ export class Input {
     window.addEventListener("blur", () => {
       this.keys.clear();
       this.mouseFire = false;
+      this.mouseAim = false;
     });
     this.canvas.addEventListener("mousedown", (e) => {
       if (!this.enabled || this.isTouchEvent) return;
       if (e.button === 0 && this.pointerLocked) this.mouseFire = true;
+      if (e.button === 2 && this.pointerLocked) this.mouseAim = true;
     });
     window.addEventListener("mouseup", (e) => {
       if (e.button === 0) this.mouseFire = false;
+      if (e.button === 2) this.mouseAim = false;
     });
     document.addEventListener("mousemove", (e) => {
       if (!this.enabled || !this.pointerLocked) return;
@@ -132,7 +146,10 @@ export class Input {
     );
     document.addEventListener("pointerlockchange", () => {
       this.pointerLocked = document.pointerLockElement === this.canvas;
-      if (!this.pointerLocked) this.mouseFire = false;
+      if (!this.pointerLocked) {
+        this.mouseFire = false;
+        this.mouseAim = false;
+      }
     });
     document.addEventListener("contextmenu", (e) => {
       if (this.enabled) e.preventDefault();
@@ -157,6 +174,7 @@ export class Input {
   private lookIds = new Map<number, { x: number; y: number }>();
   private btnSprint!: HTMLElement;
   private btnCrouch!: HTMLElement;
+  private btnAim!: HTMLElement;
 
   private bindTouch(): void {
     const root = document.getElementById("touch")!;
@@ -288,6 +306,11 @@ export class Input {
       this.syncToggleButtons();
     });
     btn("btn-camera", () => (this.cameraToggle = true));
+    this.btnAim = btn("btn-aim", () => {
+      this.touchAim = !this.touchAim;
+      this.syncToggleButtons();
+    });
+    btn("btn-scope", () => (this.scopeToggle = true));
     btn("btn-weapon", () => (this.weaponCycle = 1));
     root.classList.add("on");
   }
@@ -296,6 +319,16 @@ export class Input {
   syncToggleButtons(): void {
     this.btnSprint?.classList.toggle("toggled", this.touchSprint);
     this.btnCrouch?.classList.toggle("toggled", this.touchCrouch);
+    this.btnAim?.classList.toggle("toggled", this.touchAim);
+  }
+
+  /** Игра выключает прицел, например при смерти или в подзорной трубе */
+  cancelAim(): void {
+    this.mouseAim = false;
+    if (this.touchAim) {
+      this.touchAim = false;
+      this.syncToggleButtons();
+    }
   }
 
   /** Игра может выключить бег (например, при стрельбе) */

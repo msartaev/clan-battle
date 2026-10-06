@@ -1,19 +1,27 @@
 import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, Vector3 } from "@babylonjs/core";
-import { RULES, WEAPONS, type ClanId, type WeaponId } from "@clan-battle/shared";
+import { CLANS, RULES, WEAPONS, type ClanId, type WeaponId } from "@clan-battle/shared";
 import { Humanoid, randomLook } from "./humanoid";
 import { angleDiff, clamp } from "./utils";
 
 export type BotState = "wander" | "chase" | "search" | "dead";
 
+/** Цель бота: игрок или бот другого клана. pos — живая ссылка на позицию */
+export interface Target {
+  pos: Vector3;
+  readonly alive: boolean;
+  clan: ClanId;
+  bot: Bot | null;
+}
+
 /** То, что бот знает о мире (даёт Game) */
 export interface BotContext {
   now: number;
-  playerPos: Vector3;
-  playerAlive: boolean;
-  /** Видит ли бот игрока прямо сейчас (с учётом стен, кустов и скрытности) */
-  canSee(bot: Bot): boolean;
+  /** Ближайший враг, которого бот видит прямо сейчас (с учётом стен, кустов и скрытности) */
+  findTarget(bot: Bot): Target | null;
+  /** Где примерно враги — чтобы бродить в их сторону */
+  enemyHint(bot: Bot): Vector3 | null;
   randomWalkPoint(near?: Vector3, radius?: number): Vector3;
-  shoot(bot: Bot, target: Vector3): void;
+  shoot(bot: Bot, target: Target): void;
   basePoint(clan: ClanId): { pos: Vector3; yaw: number };
 }
 
@@ -30,6 +38,7 @@ export class Bot {
   aimPitch = 0;
   speed = 0;
   private goal = new Vector3();
+  private target: Target | null = null;
   private lastSeen = new Vector3();
   private seeCheckIn = 0;
   private sees = false;
@@ -48,7 +57,10 @@ export class Bot {
   private hpBarBg: Mesh;
   private hpBarShowUntil = 0;
 
-  constructor(scene: Scene, readonly clan: ClanId, weapon: WeaponId) {
+  /** Метка над головой союзника */
+  private allyMark: Mesh | null = null;
+
+  constructor(scene: Scene, readonly clan: ClanId, weapon: WeaponId, readonly friendly = false) {
     this.id = ++botCounter;
     this.weapon = weapon;
     this.collider = MeshBuilder.CreateBox(`botCollider${this.id}`, { size: 0.5 }, scene);
@@ -77,6 +89,18 @@ export class Bot {
     this.hpBar.position.z = -0.01;
     this.hpBar.isPickable = false;
     this.hpBarBg.setEnabled(false);
+
+    if (friendly) {
+      // Свои отмечены ромбиком цвета клана — чтобы не путать с врагами издалека
+      const mark = MeshBuilder.CreateDisc(`ally${this.id}`, { radius: 0.18, tessellation: 4 }, scene);
+      const mm = new StandardMaterial(`allyMat${this.id}`, scene);
+      mm.emissiveColor = Color3.FromHexString(CLANS[clan].color);
+      mm.disableLighting = true;
+      mark.material = mm;
+      mark.billboardMode = Mesh.BILLBOARDMODE_ALL;
+      mark.isPickable = false;
+      this.allyMark = mark;
+    }
   }
 
   get position(): Vector3 {
@@ -96,6 +120,7 @@ export class Bot {
     this.state = "wander";
     this.goal.copyFrom(pos);
     this.sees = false;
+    this.target = null;
     this.seeCheckIn = Math.random() * 0.2;
     this.humanoid.deathT = 0;
     this.humanoid.setEnabled(true);
@@ -151,6 +176,7 @@ export class Bot {
       this.humanoid.deathT = clamp(this.deadTimer / 0.5, 0, 1);
       this.humanoid.animate(dt, 0, false, 0, false);
       if (this.deadTimer > 2.2) this.humanoid.setEnabled(false);
+      this.allyMark?.setEnabled(false);
       if (this.deadTimer > RULES.botRespawnSec) {
         const b = ctx.basePoint(this.clan);
         this.spawn(b.pos, b.yaw);
@@ -163,19 +189,22 @@ export class Bot {
     if (this.seeCheckIn <= 0) {
       this.seeCheckIn = 0.18 + Math.random() * 0.06;
       const was = this.sees;
-      this.sees = ctx.playerAlive && ctx.canSee(this);
-      if (this.sees) {
-        if (!was) this.reactionLeft = 0.45 + Math.random() * 0.5;
+      const t = ctx.findTarget(this);
+      this.sees = !!t;
+      if (t) {
+        if (!was || t !== this.target) this.reactionLeft = 0.45 + Math.random() * 0.5;
+        this.target = t;
         this.state = "chase";
-        this.lastSeen.copyFrom(ctx.playerPos);
+        this.lastSeen.copyFrom(t.pos);
       } else if (was && this.state === "chase") {
         this.state = "search";
         this.searchTimer = 7;
       }
     }
-    if (!ctx.playerAlive && this.state !== "wander") {
-      this.state = "wander";
+    if (this.target && !this.target.alive) {
+      this.target = null;
       this.sees = false;
+      if (this.state !== "wander") this.state = "wander";
     }
 
     let move = Vector3.Zero();
@@ -185,8 +214,9 @@ export class Bot {
 
     if (this.state === "wander") {
       if (Vector3.DistanceSquared(pos, this.goal) < 2.5) {
-        // Чаще бродят в сторону игрока, чтобы было с кем сражаться
-        this.goal = Math.random() < 0.55 ? ctx.randomWalkPoint(ctx.playerPos, 28) : ctx.randomWalkPoint();
+        // Чаще бродят в сторону врагов, чтобы было с кем сражаться
+        const hint = Math.random() < 0.6 ? ctx.enemyHint(this) : null;
+        this.goal = hint ? ctx.randomWalkPoint(hint, 24) : ctx.randomWalkPoint();
       }
       move = this.goal.subtract(pos);
       moveSpeed = 2.6;
@@ -200,11 +230,12 @@ export class Bot {
         this.state = "wander";
         this.goal = ctx.randomWalkPoint(pos, 20);
       }
-    } else if (this.state === "chase") {
-      const toP = ctx.playerPos.subtract(pos);
+    } else if (this.state === "chase" && this.target) {
+      const tPos = this.target.pos;
+      const toP = tPos.subtract(pos);
       toP.y = 0;
       const dist = toP.length();
-      faceTarget = ctx.playerPos;
+      faceTarget = tPos;
       const dirP = toP.scale(1 / Math.max(dist, 0.001));
       const side = new Vector3(dirP.z, 0, -dirP.x).scale(this.strafeDir);
       this.strafeTimer -= dt;
@@ -229,7 +260,7 @@ export class Bot {
         this.shotCooldown -= dt;
         const facingErr = Math.abs(angleDiff(this.yaw, Math.atan2(toP.x, toP.z)));
         if (this.reactionLeft <= 0 && this.shotCooldown <= 0 && facingErr < 0.35 && dist < WEAPONS[this.weapon].range) {
-          ctx.shoot(this, ctx.playerPos);
+          ctx.shoot(this, this.target);
           this.burstLeft -= 1;
           const rate = this.weapon === "weakPistol" ? 3 : this.weapon === "strongPistol" ? 1.1 : 0.8;
           this.shotCooldown = 1 / rate;
@@ -288,6 +319,9 @@ export class Bot {
         this.aimPitch = 0.1;
       }
     }
+
+    this.allyMark?.setEnabled(true);
+    this.allyMark?.position.set(pos.x, pos.y + 2.25, pos.z);
 
     // Полоска здоровья
     const showBar = ctx.now < this.hpBarShowUntil && this.hp < RULES.maxHp;

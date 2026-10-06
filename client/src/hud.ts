@@ -22,6 +22,8 @@ export class Hud {
   private vignette = $("vignette");
   private status = $("status");
   private hiddenBadge = $("hidden-badge");
+  private teamDragons = document.querySelector<HTMLElement>("#teams .t-dragons b")!;
+  private teamSnakes = document.querySelector<HTMLElement>("#teams .t-snakes b")!;
   private slots = Array.from(document.querySelectorAll<HTMLElement>("#slots .slot"));
   private cache: Record<string, string | number | boolean> = {};
   private toastTimer = 0;
@@ -33,6 +35,8 @@ export class Hud {
     document.documentElement.style.setProperty("--clan", c.color);
     document.documentElement.style.setProperty("--clan-accent", c.accent);
     $("clan-badge").textContent = c.name;
+    // Клановый предмет для разведки: у Драконов подзорная труба, у Змей бинокль
+    $("btn-scope").textContent = clan === "dragons" ? "Труба" : "Бинокль";
     this.slots.forEach((s, i) => {
       const id = WEAPON_ORDER[i];
       const short = id === "weakPistol" ? "Слабый" : id === "strongPistol" ? "Сильный" : c.weaponName;
@@ -61,7 +65,7 @@ export class Hud {
     apply();
   }
 
-  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean }): void {
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; teams: Record<ClanId, number> }): void {
     const hp = Math.ceil(s.hp);
     this.set("hp", hp, () => {
       this.hpNum.textContent = String(hp);
@@ -87,6 +91,10 @@ export class Hud {
     });
     this.set("fps", s.fps, () => {
       this.fps.textContent = `${s.fps} FPS`;
+    });
+    this.set("teams", `${s.teams.dragons}:${s.teams.snakes}`, () => {
+      this.teamDragons.textContent = String(s.teams.dragons);
+      this.teamSnakes.textContent = String(s.teams.snakes);
     });
     this.set("status", s.status, () => {
       this.status.textContent = s.status;

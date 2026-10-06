@@ -127,11 +127,60 @@ const browser = await chromium.launch({
     g.player.collider.position.set(30, 0, 30);
     g.player.hp = 100;
     g.player.invulnerableUntil = 0;
-    g.bots.forEach((b, i) => b.spawn(new V(40 + i, 0, 38), Math.PI * 1.2));
+    // Только враги рядом; союзников уводим далеко, иначе враги будут стрелять в них
+    g.bots.forEach((b, i) =>
+      b.clan !== g.player.clan ? b.spawn(new V(40 + i, 0, 38), Math.PI * 1.2) : b.spawn(new V(-55 + i, 0, -55), 0),
+    );
     await new Promise((r) => setTimeout(r, 8000));
     return { hp: g.player.hp, lives: g.player.lives, state: g.state, botStates: g.bots.map((b) => b.state) };
   });
   console.log("bot test:", botTest);
+  if (botTest.hp >= 100 && botTest.lives === 3) errors.push("[desktop] bot test: враги не нашли и не ранили игрока");
+
+  // 5 на 5: союзники и враги друг напротив друга на поле — должны начать бой между собой
+  const teamTest = await page.evaluate(async () => {
+    const g = window.__game;
+    const V = g.player.collider.position.constructor;
+    g.player.collider.position.set(-55, 0, 55); // игрок в стороне
+    const enemies = g.bots.filter((b) => b.clan !== g.player.clan);
+    const allies = g.bots.filter((b) => b.clan === g.player.clan);
+    enemies.forEach((b, i) => b.spawn(new V(30 + i * 2, 0, -30), Math.PI));
+    allies.forEach((b, i) => b.spawn(new V(30 + i * 2, 0, -46), 0));
+    // ~6 секунд игрового времени (кадры, а не время — см. выше)
+    const until = g.engine.frameId + 120;
+    while (g.engine.frameId < until) await new Promise((r) => setTimeout(r, 30));
+    const hurt = (list) => list.filter((b) => !b.alive || b.hp < 100).length;
+    return { enemies: enemies.length, allies: allies.length, enemiesHurt: hurt(enemies), alliesHurt: hurt(allies), teams: document.getElementById("teams").textContent };
+  });
+  console.log("team test:", teamTest);
+  if (teamTest.enemies !== 5 || teamTest.allies !== 4) errors.push("[desktop] team test: не 5 на 5");
+  if (teamTest.enemiesHurt + teamTest.alliesHurt === 0) errors.push("[desktop] team test: боты не воюют друг с другом");
+
+  // Подзорная труба (B) и прицел (ПКМ): приближение, стрельба в трубе запрещена
+  const scopeTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.state = "playing";
+    g.player.alive = true;
+    g.player.hp = 100;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 30));
+    };
+    g.input.scopeToggle = true;
+    await frames(12);
+    const scopedFov = g.camera.fov;
+    const overlay = document.getElementById("scope").className;
+    const ammo0 = g.player.ammo;
+    g.input.mouseFire = true;
+    await frames(4);
+    g.input.mouseFire = false;
+    const ammoScoped = g.player.ammo;
+    g.input.scopeToggle = true;
+    await frames(12);
+    return { scoped: g.scoped, scopedFov: +scopedFov.toFixed(2), overlay, shotInScope: ammo0 !== ammoScoped, fovAfter: +g.camera.fov.toFixed(2) };
+  });
+  console.log("scope test:", scopeTest);
+  if (scopeTest.scopedFov > 0.4 || scopeTest.shotInScope || scopeTest.fovAfter < 0.9) errors.push("[desktop] scope test: приближение или запрет стрельбы не работают");
 
   // Проверка прыжка и коллизий с домом
   const moveTest = await page.evaluate(async () => {
@@ -144,10 +193,12 @@ const browser = await chromium.launch({
     g.player.yaw = Math.PI; // смотрим на -z, в сторону дома
     g.player.selectWeapon(0);
     // Прыжок
+    // Ждём кадры, а не время: на программном рендере кадр длится полсекунды, а шаг игры ограничен 0.05 с
     g.input.jumpPressed = true;
     let maxY = 0;
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 30));
+    const until = g.engine.frameId + 30;
+    while (g.engine.frameId < until) {
+      await new Promise((r) => setTimeout(r, 20));
       maxY = Math.max(maxY, g.player.position.y);
     }
     return { maxJumpY: +maxY.toFixed(2) };
@@ -158,8 +209,14 @@ const browser = await chromium.launch({
     g.player.collider.position.set(-18.6, 0, 2.5);
     g.player.yaw = Math.PI;
   });
+  const waitFrames = (n) =>
+    page.evaluate(async (n) => {
+      const g = window.__game;
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    }, n);
   await page.keyboard.down("KeyW");
-  await sleep(2500);
+  await waitFrames(60);
   await page.keyboard.up("KeyW");
   const wallZ = await page.evaluate(() => window.__game.player.position.z);
   // Идём в дверь: должны зайти внутрь
@@ -169,7 +226,7 @@ const browser = await chromium.launch({
     g.player.yaw = Math.PI;
   });
   await page.keyboard.down("KeyW");
-  await sleep(2000);
+  await waitFrames(50);
   await page.keyboard.up("KeyW");
   const doorZ = await page.evaluate(() => window.__game.player.position.z);
   console.log("move test:", { ...moveTest, stoppedAtWallZ: +wallZ.toFixed(2), walkedThroughDoorZ: +doorZ.toFixed(2) });

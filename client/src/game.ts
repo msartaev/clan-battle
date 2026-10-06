@@ -25,7 +25,7 @@ import {
   type ClanId,
   type WeaponId,
 } from "@clan-battle/shared";
-import { Bot, type BotContext } from "./bot";
+import { Bot, type BotContext, type Target } from "./bot";
 import { Effects, Sfx } from "./effects";
 import { Hud } from "./hud";
 import { flatMat } from "./humanoid";
@@ -59,6 +59,9 @@ const BOT_WEAPONS: WeaponId[] = ["weakPistol", "weakPistol", "strongPistol", "we
 const isWorld = (m: AbstractMesh) => m.metadata?.kind === "world";
 const isWorldOrSoft = (m: AbstractMesh) => m.metadata?.kind === "world" || m.metadata?.kind === "soft";
 
+/** Обычный угол обзора камеры, рад */
+const BASE_FOV = 1.05;
+
 export class Game {
   readonly engine: Engine;
   readonly scene: Scene;
@@ -86,6 +89,12 @@ export class Game {
   private fpsFrames = 0;
   private fpsShown = 0;
   private camDist = 3.6;
+  /** Смотрим в подзорную трубу (Драконы) или бинокль (Змеи) */
+  scoped = false;
+  private aiming = false;
+  /** Игрок как цель для вражеских ботов */
+  private playerTarget!: Target;
+  private botTargets = new Map<Bot, Target>();
   private rng = makeRng(7);
   private emptyWarnAt = 0;
   onGameOver: (kills: number) => void = () => undefined;
@@ -130,7 +139,7 @@ export class Game {
     this.camera = new FreeCamera("cam", new Vector3(0, 2, -5), scene);
     this.camera.minZ = 0.05;
     this.camera.maxZ = opts.touch ? 130 : 200;
-    this.camera.fov = 1.05;
+    this.camera.fov = BASE_FOV;
     this.camera.inputs.clear();
     scene.activeCamera = this.camera;
     this.sun = sun;
@@ -138,6 +147,9 @@ export class Game {
     // Небо: панорама с облаками (Poly Haven, CC0). Купол меньше дальности камеры и без тумана
     const sky = new PhotoDome("sky", "./textures/sky.jpg", { resolution: 24, size: opts.touch ? 220 : 340 }, scene);
     sky.material.fogEnabled = false;
+    sky.mesh.applyFog = false;
+    // Купол всегда вокруг камеры: иначе на краю карты дальняя стенка выходит за дальность камеры
+    sky.infiniteDistance = true;
     sky.mesh.isPickable = false;
     // Туман и фон под цвет горизонта панорамы, чтобы дальние деревья растворялись в небе
     scene.fogColor = new Color3(0.78, 0.84, 0.92);
@@ -163,11 +175,24 @@ export class Game {
     this.hud = new Hud(opts.clan);
     this.hud.onSlotTap((i) => this.player.selectWeapon(i));
 
-    // Боты вражеского клана
+    // Команды 5 на 5: сначала враги (botCount), потом союзники — на одного меньше, ведь игрок тоже в команде
     const enemy = enemyClan(opts.clan);
     for (let i = 0; i < opts.botCount; i++) {
       this.bots.push(new Bot(scene, enemy, BOT_WEAPONS[i % BOT_WEAPONS.length]));
     }
+    for (let i = 0; i < opts.botCount - 1; i++) {
+      this.bots.push(new Bot(scene, opts.clan, BOT_WEAPONS[(i + 1) % BOT_WEAPONS.length], true));
+    }
+    const p = this.player;
+    const game = this;
+    this.playerTarget = {
+      pos: p.position,
+      get alive() {
+        return p.alive && game.state === "playing";
+      },
+      clan: opts.clan,
+      bot: null,
+    };
 
     // Вид от первого лица: руки с оружием прикреплены к камере
     this.viewmodel = new TransformNode("viewmodel", scene);
@@ -277,9 +302,8 @@ export class Game {
     this.player.lives = RULES.lives;
     this.player.selectWeapon(0);
     this.respawnPlayer();
-    const enemy = enemyClan(this.opts.clan);
     this.bots.forEach((b, i) => {
-      const base = this.world.bases[enemy];
+      const base = this.world.bases[b.clan];
       const sp = base.spawns[i % base.spawns.length];
       b.spawn(sp, base.facing);
     });
@@ -299,6 +323,24 @@ export class Game {
     this.state = "playing";
     // После смерти тело было видно — в 1-м лице снова прячем
     this.setFirstPerson(this.firstPerson);
+  }
+
+  setScoped(v: boolean): void {
+    this.scoped = v;
+    const el = document.getElementById("scope")!;
+    const spyglass = this.opts.clan === "dragons";
+    el.className = v ? (spyglass ? "spyglass" : "binoculars") : "hidden";
+    const how = this.input.isTouch ? "нажми ещё раз, чтобы убрать" : "B — убрать";
+    (el.firstElementChild as HTMLElement).textContent = `${spyglass ? "Подзорная труба" : "Бинокль"} · ${how}`;
+    document.body.classList.toggle("scoped", v);
+    // Смотрим глазами персонажа: тело и оружие в руках прячем
+    this.player.humanoid.setVisible(!v && !this.firstPerson);
+    this.viewmodel.setEnabled(!v && this.firstPerson);
+    if (v) {
+      this.input.cancelAim();
+      this.input.cancelTouchSprint();
+    }
+    if (!v) this.setFirstPerson(this.firstPerson);
   }
 
   setFirstPerson(v: boolean): void {
@@ -329,7 +371,14 @@ export class Game {
     this.now += dt;
     const p = this.player;
 
-    if (input.cameraToggle) this.setFirstPerson(!this.firstPerson);
+    if (input.cameraToggle && !this.scoped) this.setFirstPerson(!this.firstPerson);
+    if (input.scopeToggle && this.state === "playing") this.setScoped(!this.scoped);
+    if (this.state !== "playing" && this.scoped) this.setScoped(false);
+    this.aiming = input.aim && !this.scoped && this.state === "playing";
+    // В приближении поворот медленнее — пропорционально углу обзора, чтобы целиться точно
+    const zoomK = this.camera.fov / BASE_FOV;
+    input.lookDX *= zoomK;
+    input.lookDY *= zoomK;
     if (input.weaponSelect !== null) p.selectWeapon(input.weaponSelect);
     if (input.weaponCycle) p.cycleWeapon(input.weaponCycle);
     this.updateViewmodelWeapon();
@@ -367,10 +416,19 @@ export class Game {
       kills: this.kills,
       lives: p.lives,
       fps: this.fpsShown,
-      status: p.crouching ? "Присел" : p.sprinting ? "Бег" : "",
+      status: this.aiming ? "Прицел" : p.crouching ? "Присел" : p.sprinting ? "Бег" : "",
       hidden,
+      teams: this.teamCounts(),
     });
     input.endFrame();
+  }
+
+  /** Сколько бойцов каждого клана сейчас в строю (игрок считается за свой клан) */
+  private teamCounts(): Record<ClanId, number> {
+    const n: Record<ClanId, number> = { dragons: 0, snakes: 0 };
+    if (this.player.alive && this.state === "playing") n[this.opts.clan]++;
+    for (const b of this.bots) if (b.alive) n[b.clan]++;
+    return n;
   }
 
   private updateViewmodelWeapon(): void {
@@ -388,6 +446,13 @@ export class Game {
     const cam = this.camera;
     const eye = new Vector3(p.position.x, p.position.y + (this.state === "dead" ? 0.6 : p.eyeHeight), p.position.z);
     cam.rotation.set(p.pitch, p.yaw, 0);
+    // Плавное приближение: труба/бинокль ×4.5, прицел ×1.8
+    const wantFov = this.scoped ? BASE_FOV / 4.5 : this.aiming ? BASE_FOV / 1.8 : BASE_FOV;
+    cam.fov += (wantFov - cam.fov) * Math.min(1, dt * 12);
+    if (this.scoped && this.state !== "dead") {
+      cam.position.copyFrom(eye);
+      return;
+    }
     if (this.firstPerson && this.state !== "dead") {
       cam.position.copyFrom(eye);
       // Покачивание оружия при ходьбе и отдача
@@ -404,7 +469,7 @@ export class Game {
     const back = fwd.scale(-1);
     const ray = new Ray(pivot, back, this.camDist + 0.3);
     const hit = this.scene.pickWithRay(ray, isWorld, false);
-    let d = this.camDist;
+    let d = this.aiming ? 1.9 : this.camDist;
     if (hit?.hit && hit.distance < d + 0.3) d = Math.max(0.3, hit.distance - 0.3);
     const target = pivot.add(back.scale(d));
     // Камера не уходит под землю
@@ -416,6 +481,11 @@ export class Game {
 
   private tryShoot(fresh: boolean): void {
     const p = this.player;
+    // В подзорную трубу не стреляют — сначала убери её (B)
+    if (this.scoped) {
+      if (fresh) this.hud.message(this.opts.clan === "dragons" ? "Убери подзорную трубу (B)" : "Убери бинокль (B)", 1.2, "#ffe14a");
+      return;
+    }
     if (this.now < this.nextShotAt) return;
     const w = WEAPONS[p.weapon];
     if (p.ammo < w.ammoPerShot) {
@@ -436,7 +506,7 @@ export class Game {
 
     const cam = this.camera;
     const aimDir = dirFromYawPitch(p.yaw, p.pitch);
-    const spreadK = (p.crouching ? 0.6 : 1) * (p.speed > 4 ? 1.8 : p.speed > 0.5 ? 1.25 : 1) * (p.grounded ? 1 : 2);
+    const spreadK = (this.aiming ? 0.5 : 1) * (p.crouching ? 0.6 : 1) * (p.speed > 4 ? 1.8 : p.speed > 0.5 ? 1.25 : 1) * (p.grounded ? 1 : 2);
     const dir = applySpread(aimDir, w.spread * spreadK);
     // В 3-м лице луч начинается у игрока, а не у камеры
     const origin = this.firstPerson
@@ -447,7 +517,7 @@ export class Game {
     let maxT = wHit?.hit ? wHit.distance : w.range;
     let target: Bot | null = null;
     for (const b of this.bots) {
-      if (!b.alive) continue;
+      if (!b.alive || b.clan === p.clan) continue;
       const bp = b.position;
       const r = rayVsVerticalSegment(origin, dir, maxT, bp.x, bp.y + 0.2, bp.y + 1.62, bp.z);
       if (r.dist < 0.36 && r.t < maxT) {
@@ -476,9 +546,9 @@ export class Game {
       apply();
     }
 
-    // Боты рядом слышат выстрел
+    // Вражеские боты рядом слышат выстрел
     for (const b of this.bots) {
-      if (b.alive && Vector3.DistanceSquared(b.position, p.position) < 30 * 30) b.hear(p.position.clone());
+      if (b.alive && b.clan !== p.clan && Vector3.DistanceSquared(b.position, p.position) < 30 * 30) b.hear(p.position.clone());
     }
   }
 
@@ -503,12 +573,13 @@ export class Game {
   }
 
   private botContext(): BotContext {
-    const p = this.player;
     return {
       now: this.now,
-      playerPos: p.position,
-      playerAlive: this.state === "playing" && p.alive,
-      canSee: (b) => this.botCanSee(b),
+      findTarget: (b) => this.findTarget(b),
+      enemyHint: (b) => {
+        const list = this.enemiesOf(b.clan).filter((t) => t.alive);
+        return list.length ? list[Math.floor(Math.random() * list.length)].pos : null;
+      },
       randomWalkPoint: (near, radius) => this.world.randomWalkPoint(Math.random, near, radius),
       shoot: (b, t) => this.botShoot(b, t),
       basePoint: (clan) => {
@@ -518,14 +589,51 @@ export class Game {
     };
   }
 
-  private botCanSee(b: Bot): boolean {
+  private targetOf(b: Bot): Target {
+    let t = this.botTargets.get(b);
+    if (!t) {
+      t = {
+        pos: b.position,
+        get alive() {
+          return b.alive;
+        },
+        clan: b.clan,
+        bot: b,
+      };
+      this.botTargets.set(b, t);
+    }
+    return t;
+  }
+
+  /** Все возможные цели для клана: игрок (если он из другого клана) и чужие боты */
+  private enemiesOf(clan: ClanId): Target[] {
+    const out: Target[] = [];
+    if (this.opts.clan !== clan && this.state === "playing") out.push(this.playerTarget);
+    for (const o of this.bots) if (o.clan !== clan) out.push(this.targetOf(o));
+    return out;
+  }
+
+  /** Ближайший видимый враг: проверяем лучом не больше трёх ближайших, чтобы не тратить кадр */
+  private findTarget(b: Bot): Target | null {
+    const cands = this.enemiesOf(b.clan)
+      .filter((t) => t.alive)
+      .map((t) => ({ t, d: Vector3.DistanceSquared(t.pos, b.position) }))
+      .filter((c) => c.d < 55 * 55)
+      .sort((x, y) => x.d - y.d)
+      .slice(0, 3);
+    for (const { t } of cands) if (this.botCanSee(b, t)) return t;
+    return null;
+  }
+
+  private botCanSee(b: Bot, t: Target): boolean {
     const p = this.player;
-    const to = p.position.subtract(b.position);
+    const isPlayer = t === this.playerTarget;
+    const to = t.pos.subtract(b.position);
     to.y = 0;
     const dist = to.length();
     if (dist > 55) return false;
-    // Сидит в укрытии и не стреляет — не виден (если не вплотную)
-    if (this.isPlayerHidden() && dist > 3.5) return false;
+    // Игрок сидит в укрытии и не стреляет — не виден (если не вплотную)
+    if (isPlayer && this.isPlayerHidden() && dist > 3.5) return false;
     if (dist > 5) {
       const f = b.forward;
       const cos = (f.x * to.x + f.z * to.z) / dist;
@@ -533,8 +641,9 @@ export class Game {
       if (cos < fov) return false;
     }
     const eye = b.eyePos;
-    for (const h of [p.eyeHeight, p.crouching ? 0.6 : 1.1]) {
-      const target = p.position.add(new Vector3(0, h, 0));
+    const heights = isPlayer ? [p.eyeHeight, p.crouching ? 0.6 : 1.1] : [1.5, 1.0];
+    for (const h of heights) {
+      const target = t.pos.add(new Vector3(0, h, 0));
       const dir = target.subtract(eye);
       const len = dir.length();
       dir.scaleInPlace(1 / len);
@@ -544,29 +653,39 @@ export class Game {
     return false;
   }
 
-  private botShoot(b: Bot, _target: Vector3): void {
+  private botShoot(b: Bot, t: Target): void {
     const p = this.player;
     const w = WEAPONS[b.weapon];
     const origin = b.humanoid.getMuzzlePosition();
-    const chest = p.position.add(new Vector3(0, p.crouching ? 0.7 : 1.15, 0));
+    const victim = t.bot;
+    const isPlayer = !victim;
+    const crouch = isPlayer && p.crouching;
+    const chest = t.pos.add(new Vector3(0, crouch ? 0.7 : 1.15, 0));
     const toChest = chest.subtract(origin);
     const dist = toChest.length();
     const aim = toChest.scale(1 / dist);
-    // Боты специально мажут: сильнее, если игрок бежит или далеко
-    const spread = 0.04 + (p.speed > 4 ? 0.05 : p.speed > 0.5 ? 0.025 : 0) + Math.min(0.03, dist * 0.0008);
+    // Боты специально мажут: сильнее, если цель бежит или далеко; друг по другу — ещё сильнее, чтобы бой длился
+    const speed = isPlayer ? p.speed : victim!.speed;
+    const spread = (isPlayer ? 0.04 : 0.07) + (speed > 4 ? 0.05 : speed > 0.5 ? 0.025 : 0) + Math.min(0.03, dist * 0.0008);
     const dir = applySpread(aim, spread);
     const wHit = this.scene.pickWithRay(new Ray(origin, dir, w.range), isWorld, false);
     let maxT = wHit?.hit ? wHit.distance : w.range;
-    const r = rayVsVerticalSegment(origin, dir, maxT, p.position.x, p.position.y + 0.15, p.position.y + p.topHeight - 0.05, p.position.z);
-    const hitPlayer = r.dist < 0.34 && r.t < maxT;
-    if (hitPlayer) maxT = r.t;
+    const top = isPlayer ? p.topHeight - 0.05 : 1.62;
+    const r = rayVsVerticalSegment(origin, dir, maxT, t.pos.x, t.pos.y + 0.15, t.pos.y + top, t.pos.z);
+    const hit = r.dist < 0.34 && r.t < maxT;
+    if (hit) maxT = r.t;
     const end = origin.add(dir.scale(maxT));
-    const vol = clamp(1 - dist / 70, 0.15, 0.8);
+    const vol = clamp(1 - Vector3.Distance(origin, p.position) / 70, 0.1, 0.8);
     this.sfx.shot(b.weapon, vol);
 
     const apply = () => {
-      if (hitPlayer && this.state === "playing") {
-        this.damagePlayer(computeDamage(b.weapon, b.clan, p.clan));
+      if (hit && t.alive) {
+        const dmg = computeDamage(b.weapon, b.clan, t.clan);
+        if (isPlayer) {
+          if (this.state === "playing") this.damagePlayer(dmg);
+        } else {
+          victim!.takeDamage(dmg, b.position.clone(), this.now);
+        }
         this.effects.impact(end, true);
       } else if (wHit?.hit) {
         this.effects.impact(end, false);
