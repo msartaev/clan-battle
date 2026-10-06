@@ -574,6 +574,36 @@ const browser = await chromium.launch({
   if (!carTest.inCar || drove < 2 || !carAfter.playerWithCar || !carAfter.exited) errors.push("[desktop] car test: машина не едет или не пускает/не выпускает");
   await page.evaluate(() => window.__game.resetMatch());
 
+  // Враги опаснее: бот кидает бомбу в игрока и замораживает; вплотную бьёт ножом
+  const botBombTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    const p = g.player;
+    const V = p.collider.position.constructor;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    p.collider.position.set(30, 0, -32);
+    p.hp = 100;
+    p.invulnerableUntil = 0;
+    g.bots.forEach((b) => b.spawn(new V(-50, 0, 60), 0));
+    const b = g.bots.find((x) => x.clan !== p.clan);
+    b.spawn(new V(30, 0, -18), Math.PI);
+    b.bombs = { boom: 0, frost: 1 };
+    g["botThrow"](b, "frost", g["playerTarget"]);
+    await frames(40);
+    const frozen = g["playerFrozenUntil"] > g.now;
+    // Нож вплотную
+    const hp0 = p.hp;
+    g["botContext"]().melee(b, g["playerTarget"]);
+    return { frozen, meleeHp: p.hp, hp0 };
+  });
+  console.log("bot bomb test:", botBombTest);
+  if (!botBombTest.frozen || botBombTest.meleeHp >= botBombTest.hp0) errors.push("[desktop] bot bomb test: бомба бота или нож не работают");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;

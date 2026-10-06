@@ -26,6 +26,10 @@ export interface BotContext {
   randomWalkPoint(near?: Vector3, radius?: number): Vector3;
   shoot(bot: Bot, target: Target): void;
   basePoint(clan: ClanId): { pos: Vector3; yaw: number };
+  /** Бросить бомбу в цель */
+  throwBomb(bot: Bot, kind: "boom" | "frost", target: Target): void;
+  /** Удар ножом вплотную */
+  melee(bot: Bot, target: Target): void;
   /** Куда идти «по заданию»: штурмовикам — к вражескому флагу; null — просто бродить */
   objective(bot: Bot): Vector3 | null;
 }
@@ -41,6 +45,10 @@ export class Bot {
   lives: number = RULES.lives;
   /** Когда последний раз ранили — захват флага сбрасывается */
   lastHitAt = -999;
+  /** Бомбы на эту жизнь */
+  bombs = { boom: 1, frost: 1 };
+  private bombCooldown = 4;
+  private meleeCooldown = 0;
   /** Заморожен бомбой до этого момента: не ходит и не стреляет */
   frozenUntil = -1;
   /** Штурмовик: в свободное время идёт захватывать вражеский флаг */
@@ -133,6 +141,9 @@ export class Bot {
     this.goal.copyFrom(pos);
     this.sees = false;
     this.target = null;
+    this.bombs = { boom: 1, frost: 1 };
+    this.bombCooldown = 4 + Math.random() * 6;
+    this.humanoid.setWeapon(this.weapon);
     this.seeCheckIn = Math.random() * 0.2;
     this.humanoid.deathT = 0;
     this.humanoid.setEnabled(true);
@@ -288,8 +299,28 @@ export class Bot {
         moveSpeed = 2.4;
       }
 
+      // Вплотную — нож вместо выстрела
+      this.meleeCooldown -= dt;
+      this.bombCooldown -= dt;
+      const close = this.sees && dist < 1.9;
+      this.humanoid.setWeapon(close ? "sword" : this.weapon);
+      if (close) {
+        if (this.meleeCooldown <= 0) {
+          this.meleeCooldown = 0.9;
+          this.humanoid.swing();
+          ctx.melee(this, this.target);
+        }
+      } else if (this.sees && this.reactionLeft <= 0 && this.bombCooldown <= 0 && dist > 8 && dist < 22) {
+        // Бомба по дуге: сначала заморозить, потом взорвать
+        const kind = this.bombs.frost > 0 && Math.random() < 0.5 ? "frost" : this.bombs.boom > 0 ? "boom" : this.bombs.frost > 0 ? "frost" : null;
+        this.bombCooldown = 12 + Math.random() * 10;
+        if (kind) {
+          this.bombs[kind]--;
+          ctx.throwBomb(this, kind, this.target);
+        }
+      }
       // Стрельба
-      if (this.sees) {
+      if (this.sees && !close) {
         this.reactionLeft -= dt;
         this.shotCooldown -= dt;
         const facingErr = Math.abs(angleDiff(this.yaw, Math.atan2(toP.x, toP.z)));

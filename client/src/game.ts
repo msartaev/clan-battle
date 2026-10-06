@@ -29,6 +29,7 @@ import {
   type WeaponId,
 } from "@clan-battle/shared";
 import { Animal, type Prey } from "./animals";
+import { Birds } from "./birds";
 import { Bot, type BotContext, type Target } from "./bot";
 import { Effects, Sfx } from "./effects";
 import { Hud } from "./hud";
@@ -134,6 +135,7 @@ export class Game {
   };
   private medkits: AmmoChest[] = [];
   readonly animals: Animal[] = [];
+  private birds!: Birds;
   /** За рулём какой машины (или null) */
   driving: { mesh: Mesh; yaw: number; home: Vector3; homeYaw: number; speed?: number } | null = null;
   private carSpeed = 0;
@@ -146,6 +148,8 @@ export class Game {
   bombs = { weak: 1, strong: 0, boom: 1, frost: 1 };
   /** Летящие боевые бомбы */
   private thrown: { mesh: Mesh; pos: Vector3; vel: Vector3; kind: "boom" | "frost"; clan: ClanId }[] = [];
+  /** Игрока заморозили вражеской бомбой */
+  private playerFrozenUntil = -1;
   /** Ледяные глыбы вокруг замороженных */
   private ice: { mesh: Mesh; until: number; follow: Vector3 }[] = [];
   /** Активный купол бессмертия (один на игрока) */
@@ -263,6 +267,7 @@ export class Game {
     this.buildChests();
     this.buildMedkits();
     this.spawnAnimals();
+    this.birds = new Birds(this.scene, opts.detail < 1 ? 6 : 12);
 
     if (!opts.touch && !opts.lowFx) {
       const sg = new ShadowGenerator(2048, sun);
@@ -727,6 +732,25 @@ export class Game {
     }
   }
 
+  /** Бот бросает бомбу по дуге точно в цель (гравитация как у броска игрока) */
+  private botThrow(b: Bot, kind: "boom" | "frost", t: Target): void {
+    const from = b.humanoid.getMuzzlePosition();
+    const to = t.pos.add(new Vector3(0, 0.3, 0));
+    const d = to.subtract(from);
+    const horiz = Math.hypot(d.x, d.z);
+    const h = 12; // м/с по горизонтали
+    const time = Math.max(0.3, horiz / h);
+    const vel = new Vector3((d.x / horiz) * h, (d.y + 0.5 * 14 * time * time) / time, (d.z / horiz) * h);
+    const mesh = MeshBuilder.CreateSphere("bomb", { diameter: 0.22, segments: 8 }, this.scene);
+    mesh.material = flatMat(this.scene, kind === "boom" ? "#2a2a2a" : "#7fd8ff", kind === "boom" ? 0 : 0.4);
+    mesh.isPickable = false;
+    mesh.position.copyFrom(from);
+    this.thrown.push({ mesh, pos: from.clone(), vel, kind, clan: b.clan });
+    const vol = clamp(1 - Vector3.Distance(from, this.player.position) / 60, 0.1, 0.8);
+    this.sfx.swing(vol);
+    if (t === this.playerTarget) this.hud.message(kind === "boom" ? "Бомба! Беги!" : "Ледяная бомба! Уходи!", 1.2, "#ff6b5a");
+  }
+
   /** Взрыв: урон по площади (не по своим), звери тоже, окна в радиусе бьются */
   private explode(at: Vector3, clan: ClanId): void {
     const R = RULES.blastRadius;
@@ -785,7 +809,13 @@ export class Game {
       encase(a.pos, a.info.height + 0.3, a.info.radius + 0.2);
       n++;
     }
-    if (n > 0) this.hud.message(`Заморожено: ${n}`, 1.4, "#9fe8ff");
+    const p = this.player;
+    if (p.clan !== clan && p.alive && !this.inDome() && Vector3.Distance(p.position, at) <= R) {
+      this.playerFrozenUntil = until;
+      if (this.driving) this.exitCar();
+      encase(p.position, 1.95, 0.4);
+      this.hud.message("Тебя заморозили! 10 секунд во льду", 2, "#9fe8ff");
+    } else if (n > 0) this.hud.message(`Заморожено: ${n}`, 1.4, "#9fe8ff");
   }
 
   // ---------------- Окна ----------------
@@ -910,6 +940,7 @@ export class Game {
     this.setVmSwordLevel(1);
     this.chargeFrom = -1;
     this.bombs = { weak: 1, strong: 0, boom: 1, frost: 1 };
+    this.playerFrozenUntil = -1;
     for (const t of this.thrown) t.mesh.dispose();
     this.thrown = [];
     for (const c of this.ice) c.mesh.dispose();
@@ -945,6 +976,13 @@ export class Game {
   }
 
   private respawnPlayer(): void {
+    // Лёд не переживает смерть
+    this.playerFrozenUntil = -1;
+    this.ice = this.ice.filter((c) => {
+      if (c.follow !== this.player.position) return true;
+      c.mesh.dispose();
+      return false;
+    });
     const base = this.world.bases[this.opts.clan];
     const sp = base.spawns[Math.floor(this.rng() * base.spawns.length)];
     this.player.spawnAt(sp, base.facing, this.now);
@@ -1016,6 +1054,15 @@ export class Game {
     this.updateViewmodelWeapon();
 
     if (this.state === "playing") {
+      const frozen = this.now < this.playerFrozenUntil;
+      if (frozen) {
+        // Во льду: только смотреть по сторонам
+        input.moveX = input.moveZ = 0;
+        input.fire = false;
+        input.jumpPressed = false;
+        input.use = false;
+        input.bomb = null;
+      }
       if (input.use) this.toggleCar();
       if (this.driving) this.updateCar(dt);
       else p.update(dt, input, this.now, () => this.canStand(), (x, z, y) => this.world.floorAt(x, z, y));
@@ -1046,6 +1093,7 @@ export class Game {
     const ctx = this.botContext();
     for (const b of this.bots) b.update(dt, ctx);
     this.updateAnimals(dt);
+    this.birds.update(dt, this.now);
     this.updateDome(dt);
     this.updateThrown(dt);
     if (this.state === "playing" || this.state === "dead") this.updateMatch(dt);
@@ -1376,6 +1424,14 @@ export class Game {
       },
       randomWalkPoint: (near, radius) => this.world.randomWalkPoint(Math.random, near, radius),
       shoot: (b, t) => this.botShoot(b, t),
+      throwBomb: (b, kind, t) => this.botThrow(b, kind, t),
+      melee: (b, t) => {
+        const dmg = 10;
+        this.sfx.swing(0.6);
+        if (t.animal) t.animal.takeDamage(dmg, this.preyOf(b), this.now);
+        else if (t.bot) t.bot.takeDamage(dmg, b.position.clone(), this.now);
+        else if (this.state === "playing") this.damagePlayer(dmg);
+      },
       objective: (b) => {
         // Свой флаг захватывают — все бегут защищать; иначе штурмовики идут за чужим
         if (this.capture[b.clan].by) return this.world.bases[b.clan].flagPoint;
