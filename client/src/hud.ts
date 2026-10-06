@@ -43,7 +43,7 @@ export class Hud {
     $("btn-scope").textContent = clan === "dragons" ? "Труба" : "Бинокль";
     this.slots.forEach((s, i) => {
       const id = WEAPON_ORDER[i];
-      const short = id === "weakPistol" ? "Слабый" : id === "strongPistol" ? "Сильный" : c.weaponName;
+      const short = id === "weakPistol" ? "Слабый" : id === "strongPistol" ? "Сильный" : id === "slingshot" ? "Рогатка" : c.weaponName;
       s.innerHTML = `<span>${i + 1}</span>${short}`;
     });
   }
@@ -69,7 +69,7 @@ export class Hud {
     apply();
   }
 
-  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
     const hp = Math.ceil(s.hp);
     this.set("hp", hp, () => {
       this.hpNum.textContent = String(hp);
@@ -79,6 +79,9 @@ export class Hud {
     this.set("ammo", s.ammo, () => {
       this.ammo.innerHTML = `<b>${s.ammo}</b> патронов`;
       this.ammo.classList.toggle("empty", s.ammo <= 0);
+    });
+    this.set("owned", s.owned.join(","), () => {
+      this.slots.forEach((el, i) => (el.style.display = s.owned.includes(WEAPON_ORDER[i]) ? "" : "none"));
     });
     this.set("weapon", s.weapon, () => {
       this.weaponName.textContent = weaponDisplayName(s.weapon, this.clan);

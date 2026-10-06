@@ -30,11 +30,11 @@ import { Bot, type BotContext, type Target } from "./bot";
 import { Effects, Sfx } from "./effects";
 import { Hud } from "./hud";
 import { flatMat } from "./humanoid";
-import { getModels, gunKey, loadModels } from "./models";
+import { getModels, gunKey, loadModels, slingshotMesh } from "./models";
 import type { Input } from "./input";
 import { Player } from "./player";
 import { applySpread, clamp, dirFromYawPitch, makeRng, rayVsVerticalSegment } from "./utils";
-import { World } from "./world";
+import { type WindowPane, World } from "./world";
 
 export interface GameOptions {
   clan: ClanId;
@@ -78,6 +78,8 @@ interface Capture {
 const BOT_WEAPONS: WeaponId[] = ["weakPistol", "weakPistol", "strongPistol", "weakPistol", "clanWeapon", "weakPistol", "strongPistol", "clanWeapon"];
 
 const isWorld = (m: AbstractMesh) => m.metadata?.kind === "world";
+/** Пулям мешают стены и целые стёкла (стекло при этом бьётся) */
+const isSolid = (m: AbstractMesh) => m.metadata?.kind === "world" || m.metadata?.kind === "glass";
 const isWorldOrSoft = (m: AbstractMesh) => m.metadata?.kind === "world" || m.metadata?.kind === "soft";
 
 /** Обычный угол обзора камеры, рад */
@@ -291,7 +293,15 @@ export class Game {
     const models = getModels();
     const vmGun = (id: WeaponId, scale: number) =>
       mk(id, (g) => {
-        const gi = models.guns[gunKey(id, this.opts.clan)].instantiateModelsToScene((n) => `vm_${id}_${n}`, false, {
+        const key = gunKey(id, this.opts.clan);
+        if (!key) {
+          const sl = slingshotMesh(this.scene, "vmSling");
+          sl.parent = g;
+          sl.scaling.setAll(1.3);
+          sl.position.set(0, 0.0, 0.08);
+          return;
+        }
+        const gi = models.guns[key].instantiateModelsToScene((n) => `vm_${id}_${n}`, false, {
           doNotInstantiate: true,
         });
         const r = gi.rootNodes[0] as TransformNode;
@@ -303,6 +313,7 @@ export class Game {
     vmGun("weakPistol", 0.32);
     vmGun("strongPistol", 0.36);
     vmGun("clanWeapon", 0.42);
+    vmGun("slingshot", 1);
     const muzzle = new TransformNode("vmMuzzle", this.scene);
     muzzle.parent = vm;
     muzzle.position.set(0, 0.04, 0.3);
@@ -405,6 +416,40 @@ export class Game {
     }
   }
 
+  // ---------------- Окна ----------------
+
+  /** Стекло разбито: звон, осколки, проём свободен */
+  private shatter(w: WindowPane): void {
+    if (w.broken) return;
+    this.world.breakWindow(w);
+    const vol = clamp(1 - Vector3.Distance(w.center, this.player.position) / 60, 0.1, 1);
+    this.sfx.glass(vol);
+    this.effects.impact(w.center, false);
+    this.effects.impact(w.center.add(new Vector3(0, -0.3, 0)), false);
+  }
+
+  /** Залезть в разбитое окно: подойти вплотную и идти в него — перелезаем на другую сторону */
+  private tryVault(): void {
+    const p = this.player;
+    if (!p.alive || this.input.moveZ <= 0.3) return;
+    const fwd = new Vector3(Math.sin(p.yaw), 0, Math.cos(p.yaw));
+    for (const w of this.world.windows) {
+      if (!w.broken) continue;
+      const to = w.center.subtract(p.position);
+      to.y = 0;
+      const along = Vector3.Dot(to, w.normal); // расстояние до плоскости стены
+      const side = to.subtract(w.normal.scale(along)).length(); // вбок от центра окна
+      if (Math.abs(along) > 0.9 || side > 0.5) continue;
+      // Идём в сторону стены (с любой стороны)
+      const into = Math.sign(along) * Vector3.Dot(fwd, w.normal);
+      if (into < 0.5) continue;
+      const target = w.center.add(w.normal.scale(Math.sign(along) * 0.9));
+      p.collider.position.set(target.x, 0.05, target.z);
+      this.hud.message("Залез в окно", 0.8, "#ffffff");
+      return;
+    }
+  }
+
   // ---------------- Звери ----------------
 
   /** Стая волков и медведь в лесу, лоси на лугах */
@@ -473,6 +518,10 @@ export class Game {
 
   resetMatch(): void {
     this.now = 0;
+    // Таймеры оружия считаются от this.now — после сброса времени их тоже обнуляем,
+    // иначе после «Играть снова» стрельба молчит, пока не догонит старое время
+    this.nextShotAt = 0;
+    this.emptyWarnAt = 0;
     this.kills = 0;
     this.matchLeft = RULES.protoMatchSeconds;
     this.teamKills = { dragons: 0, snakes: 0 };
@@ -483,6 +532,7 @@ export class Game {
     this.state = "playing";
     this.deadTimer = 0;
     this.player.lives = RULES.lives;
+    this.player.owned.delete("slingshot");
     this.player.selectWeapon(0);
     this.respawnPlayer();
     this.bots.forEach((b, i) => {
@@ -496,6 +546,7 @@ export class Game {
       m.mesh.setEnabled(true);
     }
     for (const a of this.animals) a.spawn(a.pos.clone());
+    this.world.repairWindows();
     for (const c of this.chests) {
       c.active = true;
       c.mesh.setEnabled(true);
@@ -578,6 +629,7 @@ export class Game {
       this.prevFire = input.fire;
       this.pickupChests();
       this.pickupMedkits();
+      this.tryVault();
     } else {
       this.prevFire = false;
       if (this.state === "dead") {
@@ -611,6 +663,7 @@ export class Game {
       status: this.aiming ? "Прицел" : p.crouching ? "Присел" : p.sprinting ? "Бег" : "",
       hidden,
       teams: this.teamCounts(),
+      owned: [...p.owned],
       timeLeft: this.matchLeft,
       capture: this.captureInfo(),
     });
@@ -720,7 +773,8 @@ export class Game {
       ? cam.position.clone()
       : cam.position.add(aimDir.scale(Vector3.Distance(cam.position, p.position.add(new Vector3(0, p.eyeHeight, 0))) * 0.9));
 
-    const wHit = this.scene.pickWithRay(new Ray(origin, dir, w.range), isWorld, false);
+    const wHit = this.scene.pickWithRay(new Ray(origin, dir, w.range), isSolid, false);
+    const glassHit = wHit?.hit && wHit.pickedMesh?.metadata?.kind === "glass" ? this.world.windowOf(wHit.pickedMesh) : undefined;
     let maxT = wHit?.hit ? wHit.distance : w.range;
     let target: Bot | null = null;
     for (const b of this.bots) {
@@ -749,6 +803,7 @@ export class Game {
     p.pitch -= p.weapon === "strongPistol" ? 0.018 : 0.006;
 
     const apply = () => {
+      if (glassHit && !beast && !target) this.shatter(glassHit);
       if (beast && beast.alive) {
         const killed = beast.takeDamage(WEAPONS[p.weapon].damage, this.playerPrey, this.now);
         this.hud.hit(killed);
@@ -765,6 +820,8 @@ export class Game {
     };
     if (p.weapon === "clanWeapon") {
       this.effects.orb(muzzle, end, CLANS[p.clan].effect, 55, apply);
+    } else if (p.weapon === "slingshot") {
+      this.effects.orb(muzzle, end, "stone", 38, apply);
     } else {
       this.effects.muzzleFlash(muzzle);
       this.effects.tracer(muzzle, end);
@@ -979,7 +1036,8 @@ export class Game {
     const speed = isPlayer ? p.speed : victim ? victim.speed : 3;
     const spread = (isPlayer ? 0.04 : 0.07) + (speed > 4 ? 0.05 : speed > 0.5 ? 0.025 : 0) + Math.min(0.03, dist * 0.0008);
     const dir = applySpread(aim, spread);
-    const wHit = this.scene.pickWithRay(new Ray(origin, dir, w.range), isWorld, false);
+    const wHit = this.scene.pickWithRay(new Ray(origin, dir, w.range), isSolid, false);
+    const glassHit = wHit?.hit && wHit.pickedMesh?.metadata?.kind === "glass" ? this.world.windowOf(wHit.pickedMesh) : undefined;
     let maxT = wHit?.hit ? wHit.distance : w.range;
     const top = isPlayer ? p.topHeight - 0.05 : beast ? beast.info.height : 1.62;
     const r = rayVsVerticalSegment(origin, dir, maxT, t.pos.x, t.pos.y + 0.15, t.pos.y + top, t.pos.z);
@@ -990,6 +1048,7 @@ export class Game {
     this.sfx.shot(b.weapon, vol);
 
     const apply = () => {
+      if (glassHit && !hit) this.shatter(glassHit);
       if (hit && t.alive && beast) {
         beast.takeDamage(WEAPONS[b.weapon].damage, this.preyOf(b), this.now);
         this.effects.impact(end, true);
@@ -1053,7 +1112,13 @@ export class Game {
         c.respawnAt = this.now + RULES.chestRespawnSec;
         p.ammo = Math.min(RULES.maxAmmo, p.ammo + RULES.chestAmmo);
         this.sfx.pickup();
-        this.hud.message(`+${RULES.chestAmmo} патронов`, 1.2, "#ffb347");
+        // Рогатка «часто попадается в сундуках»: половина шансов, пока её нет
+        if (!p.owned.has("slingshot") && this.rng() < 0.5) {
+          p.owned.add("slingshot");
+          this.hud.message(this.input.isTouch ? "Нашёл рогатку! Кнопка «Оружие»" : "Нашёл рогатку! Клавиша 4", 2.2, "#ffe14a");
+        } else {
+          this.hud.message(`+${RULES.chestAmmo} патронов`, 1.2, "#ffb347");
+        }
       }
     }
   }

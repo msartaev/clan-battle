@@ -178,18 +178,26 @@ export class Player {
     return false;
   }
 
+  /** Что есть в инвентаре: рогатку ещё нужно найти в сундуке */
+  readonly owned = new Set<WeaponId>(["weakPistol", "strongPistol", "clanWeapon"]);
+
   selectWeapon(idx: number): void {
     const id = WEAPON_ORDER[idx];
-    if (id) {
+    if (id && this.owned.has(id)) {
       this.weapon = id;
       this.humanoid.setWeapon(id);
     }
   }
 
   cycleWeapon(dir: number): void {
-    const i = WEAPON_ORDER.indexOf(this.weapon);
     const n = WEAPON_ORDER.length;
-    this.selectWeapon((i + dir + n) % n);
+    let i = WEAPON_ORDER.indexOf(this.weapon);
+    // Пропускаем то, чего ещё нет
+    for (let k = 0; k < n; k++) {
+      i = (i + dir + n) % n;
+      if (this.owned.has(WEAPON_ORDER[i])) break;
+    }
+    this.selectWeapon(i);
   }
 
   get colliderHeight(): number {

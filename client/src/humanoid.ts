@@ -12,7 +12,7 @@ import {
 } from "@babylonjs/core";
 import type { ClanId, WeaponId } from "@clan-battle/shared";
 import { CLANS } from "@clan-battle/shared";
-import { BODIES, type BodyId, getModels, gunKey } from "./models";
+import { BODIES, type BodyId, getModels, gunKey, slingshotMesh } from "./models";
 
 /**
  * Человек Quaternius Ultimate Modular (CC0): нормальные пропорции, одежда, скелет.
@@ -137,20 +137,25 @@ export class Humanoid {
     this.afterAnim = scene.onAfterAnimationsObservable.add(() => this.afterAnimations());
 
     // Бластеры в правой кисти; ориентацию подбираем по первому кадру позы прицела
-    const weapons: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon"];
+    const weapons: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon", "slingshot"];
     for (const w of weapons) {
-      const gi = models.guns[gunKey(w, look.clan)].instantiateModelsToScene((n) => `${name}_${w}_${n}`, false, {
-        doNotInstantiate: true,
-      });
       const holder = new TransformNode(`${name}_gun_${w}`, scene);
       // Оружие висит на корне персонажа (без зеркального масштаба glTF) и каждый кадр встаёт в кисть
       holder.parent = this.root;
-      const g = gi.rootNodes[0] as TransformNode;
-      g.parent = holder;
-      g.scaling.scaleInPlace(w === "clanWeapon" ? 0.5 : 0.42);
-      for (const m of g.getChildMeshes(false)) {
-        m.material = models.gunMat;
-        this.meshes.push(m as Mesh);
+      const key = gunKey(w, look.clan);
+      if (key) {
+        const gi = models.guns[key].instantiateModelsToScene((n) => `${name}_${w}_${n}`, false, { doNotInstantiate: true });
+        const g = gi.rootNodes[0] as TransformNode;
+        g.parent = holder;
+        g.scaling.scaleInPlace(w === "clanWeapon" ? 0.5 : 0.42);
+        for (const m of g.getChildMeshes(false)) {
+          m.material = models.gunMat;
+          this.meshes.push(m as Mesh);
+        }
+      } else {
+        const sl = slingshotMesh(scene, `${name}_sling`);
+        sl.parent = holder;
+        this.meshes.push(sl);
       }
       const muzzle = new TransformNode(`${name}_muzzle_${w}`, scene);
       muzzle.parent = holder;

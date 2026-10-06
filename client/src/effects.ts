@@ -90,7 +90,7 @@ interface Orb {
   to: Vector3;
   t: number;
   dur: number;
-  kind: "fire" | "poison";
+  kind: OrbKind;
   onHit: () => void;
 }
 
@@ -104,8 +104,8 @@ export class Effects {
   private fire: SparkPool;
   private poison: SparkPool;
   private orbs: Orb[] = [];
-  private orbFree: { fire: Mesh[]; poison: Mesh[] } = { fire: [], poison: [] };
-  private orbMats: { fire: StandardMaterial; poison: StandardMaterial };
+  private orbFree: Record<OrbKind, Mesh[]> = { fire: [], poison: [], stone: [] };
+  private orbMats: Record<OrbKind, StandardMaterial>;
   private flash: Mesh;
   private flashLife = 0;
 
@@ -117,7 +117,9 @@ export class Effects {
     this.hit = new SparkPool(scene, "hit", "#ffe14a", Math.round(60 * n));
     this.fire = new SparkPool(scene, "fire", "#ff7a1a", Math.round(140 * n));
     this.poison = new SparkPool(scene, "poison", "#8aff3a", Math.round(140 * n));
-    this.orbMats = { fire: glowMat(scene, "orbFire", "#ffb347"), poison: glowMat(scene, "orbPoison", "#a8ff5a") };
+    const stoneMat = new StandardMaterial("orbStone", scene);
+    stoneMat.diffuseColor = Color3.FromHexString("#8a8580");
+    this.orbMats = { fire: glowMat(scene, "orbFire", "#ffb347"), poison: glowMat(scene, "orbPoison", "#a8ff5a"), stone: stoneMat };
     this.flash = MeshBuilder.CreateIcoSphere("muzzleFlash", { radius: 0.09, subdivisions: 1 }, scene);
     this.flash.material = glowMat(scene, "flashMat", "#fff6c0");
     this.flash.isPickable = false;
@@ -162,10 +164,10 @@ export class Effects {
   }
 
   /** Летящий заряд кланового оружия: огонь дракона или яд змеи */
-  orb(from: Vector3, to: Vector3, kind: "fire" | "poison", speed: number, onHit: () => void): void {
+  orb(from: Vector3, to: Vector3, kind: OrbKind, speed: number, onHit: () => void): void {
     let mesh = this.orbFree[kind].pop();
     if (!mesh) {
-      mesh = MeshBuilder.CreateIcoSphere(`orb_${kind}`, { radius: 0.16, subdivisions: 1 }, this.scene);
+      mesh = MeshBuilder.CreateIcoSphere(`orb_${kind}`, { radius: kind === "stone" ? 0.045 : 0.16, subdivisions: 1 }, this.scene);
       mesh.material = this.orbMats[kind];
       mesh.isPickable = false;
     }
@@ -194,16 +196,21 @@ export class Effects {
       o.t += dt;
       const k = Math.min(1, o.t / o.dur);
       Vector3.LerpToRef(o.from, o.to, k, o.mesh.position);
-      const s = 1 + Math.sin(o.t * 40) * 0.2;
-      o.mesh.scaling.set(s, s, s);
-      // Хвост из искр
-      const pool = o.kind === "fire" ? this.fire : this.poison;
-      pool.emit(o.mesh.position, 1, 0.6, 0.13, 0.3, o.kind === "fire" ? -1.5 : 2);
+      if (o.kind === "stone") {
+        // Камешек летит по небольшой дуге
+        o.mesh.position.y += Math.sin(k * Math.PI) * Vector3.Distance(o.from, o.to) * 0.03;
+      } else {
+        const s = 1 + Math.sin(o.t * 40) * 0.2;
+        o.mesh.scaling.set(s, s, s);
+        // Хвост из искр
+        const pool = o.kind === "fire" ? this.fire : this.poison;
+        pool.emit(o.mesh.position, 1, 0.6, 0.13, 0.3, o.kind === "fire" ? -1.5 : 2);
+      }
       if (k >= 1) {
         o.mesh.setEnabled(false);
         this.orbFree[o.kind].push(o.mesh);
         this.orbs.splice(i, 1);
-        this.clanBurst(o.to, o.kind);
+        if (o.kind !== "stone") this.clanBurst(o.to, o.kind);
         o.onHit();
       }
     }
@@ -221,6 +228,8 @@ export class Effects {
     this.orbs.length = 0;
   }
 }
+
+export type OrbKind = "fire" | "poison" | "stone";
 
 /** Крошечный синтезатор звуков на WebAudio — без файлов */
 export class Sfx {
@@ -284,7 +293,12 @@ export class Sfx {
     }
   }
 
-  shot(weapon: "weakPistol" | "strongPistol" | "clanWeapon", distanceVol = 1): void {
+  shot(weapon: "weakPistol" | "strongPistol" | "clanWeapon" | "slingshot", distanceVol = 1): void {
+    if (weapon === "slingshot") {
+      // Резинка рогатки: короткий «твэнг»
+      this.tone(520, 0.09, 0.12 * distanceVol, 0.45);
+      return;
+    }
     if (weapon === "weakPistol") this.burst(2600, 0.08, 0.18 * distanceVol);
     else if (weapon === "strongPistol") this.burst(1400, 0.16, 0.3 * distanceVol);
     else {
@@ -299,6 +313,13 @@ export class Sfx {
 
   kill(): void {
     this.tone(660, 0.12, 0.12, 1.5);
+  }
+
+  /** Звон разбитого стекла: высокий шум и пара звонких нот */
+  glass(distanceVol = 1): void {
+    this.burst(5200, 0.22, 0.22 * distanceVol);
+    this.tone(2400, 0.12, 0.06 * distanceVol, 1.3);
+    this.tone(3100, 0.18, 0.05 * distanceVol, 0.8);
   }
 
   hurt(): void {

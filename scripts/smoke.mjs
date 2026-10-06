@@ -312,6 +312,93 @@ const browser = await chromium.launch({
   if (animalTest.wolfHp >= animalTest.wolfHp0) errors.push("[desktop] animal test: выстрелы не ранили волка");
   await page.evaluate(() => window.__game.resetMatch());
 
+  // Окна: выстрел разбивает стекло, через разбитое окно можно залезть в дом; рогатка ранит
+  const windowTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    g.player.invulnerableUntil = g.now + 999;
+    g.bots.forEach((b) => b.spawn(b.position.clone().set(0, 0, 60), 0));
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    const ws = g.world.windows;
+    // Окно дома (подоконник 1 м), снаружи стоим в 4 м и целимся в центр стекла
+    const w = ws.find((x) => Math.abs(x.sill - 1) < 0.01);
+    const out = w.center.add(w.normal.scale(4));
+    g.setFirstPerson(true);
+    g.player.collider.position.set(out.x, 0, out.z);
+    const d = w.center.subtract(new out.constructor(out.x, g.player.eyeHeight, out.z));
+    g.player.yaw = Math.atan2(d.x, d.z);
+    g.player.pitch = -Math.atan2(d.y, Math.hypot(d.x, d.z));
+    g.player.selectWeapon(1);
+    await frames(3);
+    const ammo0 = g.player.ammo;
+    g.input.mouseFire = true;
+    for (let k = 0; k < 30 && !w.broken; k++) await frames(1);
+    g.input.mouseFire = false;
+    await frames(2);
+    const broken = w.broken;
+    const shots = ammo0 - g.player.ammo;
+    // Лезем: подходим вплотную и идём в окно
+    const near = w.center.add(w.normal.scale(0.6));
+    g.player.collider.position.set(near.x, 0, near.z);
+    g.player.yaw = Math.atan2(-w.normal.x, -w.normal.z);
+    g.player.pitch = 0;
+    if (!broken) return { windows: ws.length, broken, shots, state: g.state, alive: g.player.alive, weapon: g.player.weapon };
+    return { windows: ws.length, broken, shots, side0: +((g.player.position.x - w.center.x) * w.normal.x + (g.player.position.z - w.center.z) * w.normal.z).toFixed(2), wn: [w.normal.x, w.normal.z] };
+  });
+  if (!windowTest.broken) console.log("window test (failed):", windowTest);
+  await page.keyboard.down("KeyW");
+  await page.evaluate(async () => {
+    const g = window.__game;
+    const u = g.engine.frameId + 8;
+    while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+  });
+  await page.keyboard.up("KeyW");
+  const vault = await page.evaluate(() => {
+    const g = window.__game;
+    const w = g.world.windows.find((x) => x.broken);
+    g.setFirstPerson(false);
+    if (!w) return NaN;
+    return +((g.player.position.x - w.center.x) * w.normal.x + (g.player.position.z - w.center.z) * w.normal.z).toFixed(2);
+  });
+  console.log("window test:", { ...windowTest, sideAfter: vault });
+  if (!windowTest.broken) errors.push("[desktop] window test: выстрел не разбил стекло");
+  if (!(vault < 0)) errors.push("[desktop] window test: не получилось залезть в разбитое окно");
+
+  const slingTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    const p = g.player;
+    p.owned.add("slingshot");
+    p.selectWeapon(3);
+    p.collider.position.set(0, 0, -25);
+    p.yaw = 0;
+    p.pitch = 0;
+    const b = g.bots[2];
+    b.spawn(new p.collider.position.constructor(0, 0, -17), Math.PI);
+    b.update = () => {};
+    g.setFirstPerson(true);
+    let u = g.engine.frameId + 3;
+    while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    const hp0 = b.hp;
+    g.input.mouseFire = true;
+    u = g.engine.frameId + 12;
+    while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    g.input.mouseFire = false;
+    u = g.engine.frameId + 10;
+    while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    delete b.update;
+    g.setFirstPerson(false);
+    return { weapon: p.weapon, hp0, hp: b.hp };
+  });
+  console.log("slingshot test:", slingTest);
+  if (slingTest.weapon !== "slingshot" || slingTest.hp >= slingTest.hp0) errors.push("[desktop] slingshot test: рогатка не ранит");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;

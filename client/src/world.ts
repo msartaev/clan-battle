@@ -1,4 +1,5 @@
 import {
+  AbstractMesh,
   Color3,
   DynamicTexture,
   InstancedMesh,
@@ -22,7 +23,7 @@ import { buildCarMesh, type CarKind } from "./cars";
 import { makeRng } from "./utils";
 
 /** Тип объекта для выстрелов и видимости */
-export type HitKind = "world" | "soft";
+export type HitKind = "world" | "soft" | "glass";
 
 export interface Rect {
   x0: number;
@@ -51,6 +52,25 @@ export interface BaseInfo {
 }
 
 export const MAP_HALF = 64;
+
+/** Стекло в окне: целое не пускает и останавливает пули, разбитое — можно залезть */
+export interface WindowPane {
+  mesh: Mesh;
+  /** Центр окна и наружная нормаль стены (в мире) */
+  center: Vector3;
+  normal: Vector3;
+  /** Низ проёма над землёй, м */
+  sill: number;
+  broken: boolean;
+}
+
+interface WindowSpec {
+  pos: Vector3;
+  rotY: number;
+  w: number;
+  h: number;
+  sill: number;
+}
 
 function tag(m: Mesh | InstancedMesh, kind: HitKind, collide: boolean): void {
   m.metadata = { kind };
@@ -109,6 +129,8 @@ function photoMat(scene: Scene, file: string, tint = "#ffffff"): StandardMateria
 }
 
 export class World {
+  readonly windows: WindowPane[] = [];
+  private glassMat: StandardMaterial | null = null;
   readonly obstacles: Rect[] = [];
   readonly covers: CoverSpot[] = [];
   readonly shadowCasters: (Mesh | InstancedMesh)[] = [];
@@ -263,12 +285,21 @@ export class World {
     this.register(pad, null, false);
 
     // Бункер: бетонный домик с дверью, флаг на крыше
-    const bunker = this.buildWalls(`bunker_${clan}`, 6, 5, 2.6, this.mConcrete, [
-      [{ x: 0, w: 1.4, b: 0, t: 2.2 }],
-      [{ x: -1.5, w: 0.8, b: 1.4, t: 1.9 }, { x: 1.5, w: 0.8, b: 1.4, t: 1.9 }],
-      [{ x: 0, w: 0.8, b: 1.4, t: 1.9 }],
-      [{ x: 0, w: 0.8, b: 1.4, t: 1.9 }],
-    ]);
+    const bunkerWindows: WindowSpec[] = [];
+    const bunker = this.buildWalls(
+      `bunker_${clan}`,
+      6,
+      5,
+      2.6,
+      this.mConcrete,
+      [
+        [{ x: 0, w: 1.4, b: 0, t: 2.2 }],
+        [{ x: -1.5, w: 0.8, b: 1.4, t: 1.9 }, { x: 1.5, w: 0.8, b: 1.4, t: 1.9 }],
+        [{ x: 0, w: 0.8, b: 1.4, t: 1.9 }],
+        [{ x: 0, w: 0.8, b: 1.4, t: 1.9 }],
+      ],
+      bunkerWindows,
+    );
     // Дверь смотрит в центр карты: локальная -z → поворачиваем
     bunker.parent = root;
     bunker.rotation.y = Math.PI;
@@ -279,6 +310,8 @@ export class World {
     roof.material = flatMat(this.scene, "#6d7176");
     this.register(roof, "world", true, true);
     this.register(bunker, "world", true, true);
+    // Бункер повёрнут на 180° и сдвинут — стёкла ставим в той же системе координат
+    this.glaze(`bunker_${clan}`, root, bunkerWindows, Math.PI, new Vector3(0, 0, -2));
     const stripe = MeshBuilder.CreateBox(`bunkerStripe_${clan}`, { width: 6.05, height: 0.35, depth: 5.05 }, this.scene);
     stripe.parent = root;
     stripe.position.set(0, 2.2, -2);
@@ -388,6 +421,7 @@ export class World {
     h: number,
     mat: StandardMaterial,
     openings: { x: number; w: number; b: number; t: number }[][],
+    windows?: WindowSpec[],
   ): Mesh {
     const T = 0.2;
     const pieces: Mesh[] = [];
@@ -398,7 +432,17 @@ export class World {
         const o0 = o.x - o.w / 2;
         const o1 = o.x + o.w / 2;
         if (o0 > cur) segs.push([cur, o0, 0, h]);
-        if (o.b > 0) segs.push([o0, o1, 0, o.b]);
+        if (o.b > 0) {
+          segs.push([o0, o1, 0, o.b]);
+          // Окно (проём не от пола) — запоминаем место для стекла
+          windows?.push({
+            pos: new Vector3(px + Math.cos(rotY) * o.x, (o.b + Math.min(o.t, h)) / 2, pz - Math.sin(rotY) * o.x),
+            rotY,
+            w: o.w,
+            h: Math.min(o.t, h) - o.b,
+            sill: o.b,
+          });
+        }
         if (o.t < h) segs.push([o0, o1, o.t, h]);
         cur = o1;
       }
@@ -423,6 +467,58 @@ export class World {
     merged.material = mat;
     merged.receiveShadows = true;
     return merged;
+  }
+
+  /** Стёкла во все окна дома или бункера (root — его корень) */
+  private glaze(prefix: string, root: TransformNode, specs: WindowSpec[], extraRotY = 0, offset = Vector3.Zero()): void {
+    if (!this.glassMat) {
+      const m = new StandardMaterial("glass", this.scene);
+      m.diffuseColor = new Color3(0.55, 0.7, 0.8);
+      m.specularColor = new Color3(0.9, 0.9, 0.9);
+      m.specularPower = 96;
+      m.alpha = 0.32;
+      m.backFaceCulling = false;
+      this.glassMat = m;
+    }
+    root.computeWorldMatrix(true);
+    specs.forEach((sp, i) => {
+      const pane = MeshBuilder.CreateBox(`${prefix}_glass${i}`, { width: sp.w, height: sp.h, depth: 0.04 }, this.scene);
+      const holder = new TransformNode(`${prefix}_gh${i}`, this.scene);
+      holder.parent = root;
+      holder.rotation.y = extraRotY;
+      holder.position.copyFrom(offset);
+      pane.parent = holder;
+      pane.position.copyFrom(sp.pos);
+      pane.rotation.y = sp.rotY;
+      pane.material = this.glassMat!;
+      tag(pane, "glass", true);
+      pane.computeWorldMatrix(true);
+      const center = pane.getAbsolutePosition().clone();
+      const normal = pane.getDirection(new Vector3(0, 0, 1)).normalize();
+      normal.y = 0;
+      this.windows.push({ mesh: pane, center, normal: normal.normalize(), sill: sp.sill, broken: false });
+    });
+  }
+
+  /** Разбить окно: стекло пропадает, проём свободен */
+  breakWindow(pane: WindowPane): void {
+    if (pane.broken) return;
+    pane.broken = true;
+    pane.mesh.setEnabled(false);
+    pane.mesh.checkCollisions = false;
+  }
+
+  /** Новый матч — все окна снова целые */
+  repairWindows(): void {
+    for (const w of this.windows) {
+      w.broken = false;
+      w.mesh.setEnabled(true);
+      w.mesh.checkCollisions = true;
+    }
+  }
+
+  windowOf(mesh: AbstractMesh): WindowPane | undefined {
+    return this.windows.find((w) => w.mesh === mesh);
   }
 
   /** Треугольная призма-фронтон (локальные оси: ширина по x, глубина по z) */
@@ -454,17 +550,22 @@ export class World {
     const wallMat = i % 2 === 0 ? this.mWood : this.mWood2;
     const roofMat = i % 3 === 0 ? this.mRoof2 : this.mRoof;
     const win = (cx: number) => ({ x: cx, w: 1.2, b: 1.0, t: 2.0 });
-    const walls = this.buildWalls(`house${i}`, w, d, h, wallMat, [
-      [{ x: 0, w: 1.3, b: 0, t: 2.25 }, win(-2.6), win(2.6)],
-      [win(-2), win(2)],
-      [win(0)],
-      [win(0)],
-    ]);
+    const specs: WindowSpec[] = [];
+    const walls = this.buildWalls(
+      `house${i}`,
+      w,
+      d,
+      h,
+      wallMat,
+      [[{ x: 0, w: 1.3, b: 0, t: 2.25 }, win(-2.6), win(2.6)], [win(-2), win(2)], [win(0)], [win(0)]],
+      specs,
+    );
     const root = new TransformNode(`houseRoot${i}`, this.scene);
     root.position.set(x, 0, z);
     root.rotation.y = rotY;
     walls.parent = root;
     this.register(walls, "world", true, true);
+    this.glaze(`house${i}`, root, specs);
 
     // Фронтоны (стены под крышей) и скаты крыши
     const ph = 1.5;

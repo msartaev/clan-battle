@@ -77,7 +77,7 @@ export const RULES = {
   medkitHp: 25,
 } as const;
 
-export type WeaponId = "weakPistol" | "strongPistol" | "clanWeapon";
+export type WeaponId = "weakPistol" | "strongPistol" | "clanWeapon" | "slingshot";
 
 export interface WeaponDef {
   id: WeaponId;
@@ -124,9 +124,19 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     spread: 0.02,
     ammoPerShot: 1,
   },
+  // Рогатка (GDD): урон 10, стреляет медленнее пистолетов, разбивает стёкла; находят в сундуках
+  slingshot: {
+    id: "slingshot",
+    name: "Рогатка",
+    damage: 10,
+    fireRate: 1.1,
+    range: 45,
+    spread: 0.008,
+    ammoPerShot: 1,
+  },
 };
 
-export const WEAPON_ORDER: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon"];
+export const WEAPON_ORDER: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon", "slingshot"];
 
 export function weaponDisplayName(id: WeaponId, clan: ClanId): string {
   return id === "clanWeapon" ? CLANS[clan].weaponName : WEAPONS[id].name;

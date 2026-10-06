@@ -1,5 +1,6 @@
 import {
   AssetContainer,
+  MeshBuilder,
   Color3,
   LoadAssetContainerAsync,
   Mesh,
@@ -52,8 +53,38 @@ const GUN_FILES = {
 } as const;
 type GunKey = keyof typeof GUN_FILES;
 
-export function gunKey(weapon: WeaponId, clan: ClanId): GunKey {
+/** Ключ модели бластера; у рогатки модели нет — она собирается в коде (slingshotMesh) */
+export function gunKey(weapon: WeaponId, clan: ClanId): GunKey | null {
+  if (weapon === "slingshot") return null;
   return weapon === "clanWeapon" ? `clan_${clan}` : weapon;
+}
+
+/**
+ * Рогатка: деревянная рогулька с резинкой. Ручка вдоль -Y, развилка вверх и вперёд (+Z),
+ * чтобы держать её в руке как пистолет. Длина ~0.25 м.
+ */
+export function slingshotMesh(scene: Scene, name: string): Mesh {
+  const wood = new StandardMaterial(`${name}_wood`, scene);
+  wood.diffuseColor = Color3.FromHexString("#7a5230");
+  wood.specularColor.set(0.05, 0.05, 0.05);
+  const band = new StandardMaterial(`${name}_band`, scene);
+  band.diffuseColor = Color3.FromHexString("#c23a2a");
+  const parts: Mesh[] = [];
+  const cyl = (h: number, d: number, x: number, y: number, z: number, rx: number, rz: number, m: StandardMaterial) => {
+    const c = MeshBuilder.CreateCylinder(`${name}_p`, { height: h, diameter: d, tessellation: 8 }, scene);
+    c.position.set(x, y, z);
+    c.rotation.set(rx, 0, rz);
+    c.material = m;
+    parts.push(c);
+  };
+  // Рукоять смотрит вниз, развилка — вперёд по стволу
+  cyl(0.12, 0.028, 0, -0.04, 0, 0, 0, wood);
+  cyl(0.11, 0.022, -0.025, 0.04, 0.03, -0.5, 0.35, wood);
+  cyl(0.11, 0.022, 0.025, 0.04, 0.03, -0.5, -0.35, wood);
+  cyl(0.07, 0.008, 0, 0.08, 0.06, 0, Math.PI / 2, band);
+  const m = Mesh.MergeMeshes(parts, true, true, undefined, false, true)!;
+  m.name = name;
+  return m;
 }
 
 /** Люди Quaternius Ultimate Modular (CC0): одетые, на общем скелете, с клипами Idle/Walk/Run */
