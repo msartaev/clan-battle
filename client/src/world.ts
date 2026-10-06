@@ -44,6 +44,10 @@ export interface BaseInfo {
   spawns: Vector3[];
   /** Куда смотреть после возрождения */
   facing: number;
+  /** Точка захвата флага — центр бункера на земле */
+  flagPoint: Vector3;
+  /** Полотнище флага: опускается по флагштоку, пока флаг захватывают */
+  flag: Mesh;
 }
 
 export const MAP_HALF = 64;
@@ -314,8 +318,9 @@ export class World {
       center.add(fwd.scale(5.5)).add(right.scale(s * 1.2)),
       center.add(fwd.scale(7.5)).add(right.scale(s * 1.5)),
     ]);
+    const flagPoint = Vector3.TransformCoordinates(new Vector3(0, 0, -2), root.getWorldMatrix());
     // Смотрим по диагонали в центр карты
-    return { clan, center, spawns, facing: rot + Math.PI / 4 };
+    return { clan, center, spawns, facing: rot + Math.PI / 4, flagPoint, flag };
   }
 
   private flagMaterial(clan: ClanId): StandardMaterial {

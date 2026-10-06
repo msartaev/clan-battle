@@ -117,8 +117,10 @@ function startGame(): void {
           showScreen("dead");
         };
         game.onRespawn = () => showScreen(null);
-        game.onGameOver = (kills) => {
-          $("over-text").textContent = `Врагов повержено: ${kills}`;
+        game.onGameOver = (r) => {
+          $("over-title").textContent = r.winner === null ? (r.reason.includes("ничья") ? "Ничья" : "Ты выбыл") : r.won ? "Победа! 🏆" : "Поражение";
+          const end = /[.!]$/.test(r.reason) ? "" : ".";
+          $("over-text").textContent = `${r.reason}${end} Врагов повержено тобой: ${r.kills}`;
           showScreen("over");
           if (document.pointerLockElement) document.exitPointerLock();
         };

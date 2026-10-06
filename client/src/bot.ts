@@ -23,6 +23,8 @@ export interface BotContext {
   randomWalkPoint(near?: Vector3, radius?: number): Vector3;
   shoot(bot: Bot, target: Target): void;
   basePoint(clan: ClanId): { pos: Vector3; yaw: number };
+  /** Куда идти «по заданию»: штурмовикам — к вражескому флагу; null — просто бродить */
+  objective(bot: Bot): Vector3 | null;
 }
 
 let botCounter = 0;
@@ -33,6 +35,11 @@ export class Bot {
   readonly humanoid: Humanoid;
   readonly weapon: WeaponId;
   hp: number = RULES.maxHp;
+  lives: number = RULES.lives;
+  /** Когда последний раз ранили — захват флага сбрасывается */
+  lastHitAt = -999;
+  /** Штурмовик: в свободное время идёт захватывать вражеский флаг */
+  attacker = false;
   state: BotState = "wander";
   yaw = 0;
   aimPitch = 0;
@@ -134,9 +141,11 @@ export class Bot {
   takeDamage(amount: number, from: Vector3, now: number): boolean {
     if (!this.alive) return false;
     this.hp = Math.max(0, this.hp - amount);
+    this.lastHitAt = now;
     this.hpBarShowUntil = now + 4;
     if (this.hp <= 0) {
       this.state = "dead";
+      this.lives -= 1;
       this.deadTimer = 0;
       this.collider.checkCollisions = false;
       this.hpBarBg.setEnabled(false);
@@ -177,7 +186,8 @@ export class Bot {
       this.humanoid.animate(dt, 0, false, 0, false);
       if (this.deadTimer > 2.2) this.humanoid.setEnabled(false);
       this.allyMark?.setEnabled(false);
-      if (this.deadTimer > RULES.botRespawnSec) {
+      // Три жизни, как у игрока: после последней — выбыл до конца матча
+      if (this.deadTimer > RULES.botRespawnSec && this.lives > 0) {
         const b = ctx.basePoint(this.clan);
         this.spawn(b.pos, b.yaw);
       }
@@ -212,7 +222,19 @@ export class Bot {
     let faceTarget: Vector3 | null = null;
     const pos = this.collider.position;
 
-    if (this.state === "wander") {
+    const obj = this.state === "wander" ? ctx.objective(this) : null;
+    if (obj) {
+      // Задание: дойти до зоны захвата и стоять в ней, оглядываясь
+      const d2 = Vector3.DistanceSquared(pos, obj);
+      if (d2 > (RULES.flagRadius - 1.2) ** 2) {
+        if (Vector3.DistanceSquared(this.goal, obj) > 4) this.goal = obj.clone();
+        move = this.goal.subtract(pos);
+        moveSpeed = 3.6;
+        faceTarget = this.goal;
+      } else {
+        this.yaw += dt * 0.8;
+      }
+    } else if (this.state === "wander") {
       if (Vector3.DistanceSquared(pos, this.goal) < 2.5) {
         // Чаще бродят в сторону врагов, чтобы было с кем сражаться
         const hint = Math.random() < 0.6 ? ctx.enemyHint(this) : null;

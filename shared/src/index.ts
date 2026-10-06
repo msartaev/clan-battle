@@ -67,6 +67,14 @@ export const RULES = {
   chestRespawnSec: 45,
   /** Сколько патронов можно носить */
   maxAmmo: 150,
+  /** Длительность матча в прототипе (в GDD — 30 минут, но на маленькой карте с ботами это долго) */
+  protoMatchSeconds: 10 * 60,
+  /** Сколько секунд стоять у вражеского флага, чтобы захватить его */
+  flagCaptureSec: 10,
+  /** Радиус зоны захвата вокруг бункера, м */
+  flagRadius: 6,
+  /** Синяя аптечка: сколько здоровья даёт */
+  medkitHp: 25,
 } as const;
 
 export type WeaponId = "weakPistol" | "strongPistol" | "clanWeapon";

@@ -232,6 +232,46 @@ const browser = await chromium.launch({
   console.log("move test:", { ...moveTest, stoppedAtWallZ: +wallZ.toFixed(2), walkedThroughDoorZ: +doorZ.toFixed(2) });
   await page.screenshot({ path: path.join(shots, "05-inside-house.png") });
 
+  // Аптечка: ранен — подобрал синюю аптечку — +25 здоровья
+  const medTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.state = "playing";
+    g.player.alive = true;
+    g.player.hp = 50;
+    g.player.lastDamageAt = g.now; // чтобы не мешало восстановление
+    const m = g["medkits"].find((x) => x.active);
+    g.player.collider.position.set(m.pos.x, 0, m.pos.z);
+    const u = g.engine.frameId + 3;
+    while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    return { medkits: g["medkits"].length, hp: g.player.hp };
+  });
+  console.log("medkit test:", medTest);
+  if (medTest.hp < 75) errors.push("[desktop] medkit test: аптечка не вылечила");
+
+  // Захват флага: игрок стоит у вражеского бункера 10 игровых секунд — победа
+  const flagTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.state = "playing";
+    g.player.alive = true;
+    g.player.hp = 100;
+    g.player.invulnerableUntil = g.now + 999; // боты не мешают
+    const enemy = g.player.clan === "dragons" ? "snakes" : "dragons";
+    g.bots.forEach((b) => b.spawn(b.position.clone().set(0, 0, 60), 0));
+    const fp = g.world.bases[enemy].flagPoint;
+    let result = null;
+    const orig = g.onGameOver;
+    g.onGameOver = (r) => (result = r);
+    g.player.collider.position.set(fp.x + 1, 0, fp.z + 1);
+    const t0 = g.now;
+    const until = g.engine.frameId + 260;
+    while (g.engine.frameId < until && !result) await new Promise((r) => setTimeout(r, 20));
+    g.onGameOver = orig;
+    return { state: g.state, won: result?.won, reason: result?.reason, seconds: +(g.now - t0).toFixed(1) };
+  });
+  console.log("flag test:", flagTest);
+  if (!flagTest.won) errors.push("[desktop] flag test: захват флага не дал победу");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;

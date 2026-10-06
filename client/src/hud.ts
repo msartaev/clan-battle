@@ -24,6 +24,10 @@ export class Hud {
   private hiddenBadge = $("hidden-badge");
   private teamDragons = document.querySelector<HTMLElement>("#teams .t-dragons b")!;
   private teamSnakes = document.querySelector<HTMLElement>("#teams .t-snakes b")!;
+  private timer = $("timer");
+  private capture = $("capture");
+  private captureLabel = document.querySelector<HTMLElement>("#capture .cap-label")!;
+  private captureFill = document.querySelector<HTMLElement>("#capture .cap-bar i")!;
   private slots = Array.from(document.querySelectorAll<HTMLElement>("#slots .slot"));
   private cache: Record<string, string | number | boolean> = {};
   private toastTimer = 0;
@@ -65,7 +69,7 @@ export class Hud {
     apply();
   }
 
-  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; teams: Record<ClanId, number> }): void {
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
     const hp = Math.ceil(s.hp);
     this.set("hp", hp, () => {
       this.hpNum.textContent = String(hp);
@@ -96,6 +100,21 @@ export class Hud {
       this.teamDragons.textContent = String(s.teams.dragons);
       this.teamSnakes.textContent = String(s.teams.snakes);
     });
+    const sec = Math.max(0, Math.ceil(s.timeLeft));
+    const clock = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+    this.set("timer", clock, () => {
+      this.timer.textContent = clock;
+      this.timer.classList.toggle("urgent", sec <= 60);
+    });
+    const cap = s.capture;
+    this.set("capText", cap ? cap.text : "", () => {
+      this.capture.classList.toggle("show", !!cap);
+      if (cap) {
+        this.captureLabel.textContent = cap.text;
+        this.captureFill.style.background = cap.color;
+      }
+    });
+    if (cap) this.captureFill.style.width = `${Math.round(cap.t * 100)}%`;
     this.set("status", s.status, () => {
       this.status.textContent = s.status;
     });

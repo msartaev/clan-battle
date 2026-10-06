@@ -56,6 +56,24 @@ interface AmmoChest {
   respawnAt: number;
 }
 
+/** Итог матча для экрана конца игры */
+export interface MatchResult {
+  /** Победивший клан; null — ничья или игрок выбыл раньше конца */
+  winner: ClanId | null;
+  /** Почему закончилось — для текста на экране */
+  reason: string;
+  /** Победил ли клан игрока */
+  won: boolean;
+  kills: number;
+}
+
+interface Capture {
+  /** Кто сейчас захватывает этот флаг */
+  by: Target | null;
+  t: number;
+  startedAt: number;
+}
+
 const BOT_WEAPONS: WeaponId[] = ["weakPistol", "weakPistol", "strongPistol", "weakPistol", "clanWeapon", "weakPistol", "strongPistol", "clanWeapon"];
 
 const isWorld = (m: AbstractMesh) => m.metadata?.kind === "world";
@@ -99,7 +117,16 @@ export class Game {
   private botTargets = new Map<Bot, Target>();
   private rng = makeRng(7);
   private emptyWarnAt = 0;
-  onGameOver: (kills: number) => void = () => undefined;
+  onGameOver: (r: MatchResult) => void = () => undefined;
+  /** Осталось секунд до конца матча */
+  matchLeft: number = RULES.protoMatchSeconds;
+  teamKills: Record<ClanId, number> = { dragons: 0, snakes: 0 };
+  /** Захват флага; ключ — чей это флаг */
+  capture: Record<ClanId, Capture> = {
+    dragons: { by: null, t: 0, startedAt: 0 },
+    snakes: { by: null, t: 0, startedAt: 0 },
+  };
+  private medkits: AmmoChest[] = [];
   onDeath: (livesLeft: number) => void = () => undefined;
   onRespawn: () => void = () => undefined;
 
@@ -187,6 +214,10 @@ export class Game {
     for (let i = 0; i < opts.botCount - 1; i++) {
       this.bots.push(new Bot(scene, opts.clan, BOT_WEAPONS[(i + 1) % BOT_WEAPONS.length], true));
     }
+    // В каждой команде двое штурмовиков: в свободное время идут за вражеским флагом
+    for (const c of ["dragons", "snakes"] as const) {
+      this.bots.filter((b) => b.clan === c).slice(1, 3).forEach((b) => (b.attacker = true));
+    }
     const p = this.player;
     const game = this;
     this.playerTarget = {
@@ -204,6 +235,7 @@ export class Game {
     this.vmMuzzle = this.buildViewmodel();
 
     this.buildChests();
+    this.buildMedkits();
 
     if (!opts.touch && !opts.lowFx) {
       const sg = new ShadowGenerator(2048, sun);
@@ -296,11 +328,88 @@ export class Game {
     });
   }
 
+  /** Синие аптечки с белым крестом: +25 здоровья */
+  private buildMedkits(): void {
+    const box = MeshBuilder.CreateBox("medBox", { width: 0.7, height: 0.45, depth: 0.5 }, this.scene);
+    box.material = flatMat(this.scene, "#1f3f9e", 0.25);
+    const crossA = MeshBuilder.CreateBox("medCrossA", { width: 0.36, height: 0.47, depth: 0.1 }, this.scene);
+    const crossB = MeshBuilder.CreateBox("medCrossB", { width: 0.1, height: 0.47, depth: 0.36 }, this.scene);
+    crossA.position.y = crossB.position.y = 0.01;
+    crossA.scaling.set(1, 1, 5.2);
+    crossB.scaling.set(5.2, 1, 1);
+    // Крест сверху: тонкие плашки на крышке
+    for (const c of [crossA, crossB]) {
+      c.scaling.y = 0.04;
+      c.position.y = 0.235;
+      c.material = flatMat(this.scene, "#ffffff", 0.4);
+    }
+    crossA.scaling.set(0.9, 0.04, 1.0);
+    crossB.scaling.set(1.0, 0.04, 0.9);
+    const med = Mesh.MergeMeshes([box, crossA, crossB], true, true, undefined, false, true)!;
+    med.name = "medkit";
+    med.isVisible = false;
+    med.isPickable = false;
+    // Места — свободные точки карты (детерминированно), по одной на зону
+    const rnd = makeRng(31);
+    const zones: [number, number, number, number][] = [
+      [-40, -20, 40, 20],
+      [-60, 20, -15, 60],
+      [15, -60, 60, -15],
+      [-60, -60, -20, -20],
+      [20, 20, 60, 60],
+      [-20, -40, 20, -15],
+      [-20, 20, 20, 45],
+      [-40, -20, 40, 20],
+    ];
+    zones.forEach(([x0, z0, x1, z1], i) => {
+      for (let k = 0; k < 40; k++) {
+        const x = x0 + rnd() * (x1 - x0);
+        const z = z0 + rnd() * (z1 - z0);
+        if (!this.world.isWalkable(x, z)) continue;
+        const inst = med.createInstance(`medkit${i}`);
+        inst.position.set(x, 0.24, z);
+        inst.isPickable = false;
+        this.medkits.push({ mesh: inst, pos: new Vector3(x, 0, z), active: true, respawnAt: 0 });
+        break;
+      }
+    });
+  }
+
+  private pickupMedkits(): void {
+    const p = this.player;
+    for (const m of this.medkits) {
+      if (!m.active) {
+        if (this.now >= m.respawnAt) {
+          m.active = true;
+          m.mesh.setEnabled(true);
+        }
+        continue;
+      }
+      if (p.hp >= RULES.maxHp) continue;
+      const dx = m.pos.x - p.position.x;
+      const dz = m.pos.z - p.position.z;
+      if (dx * dx + dz * dz < 1.5 * 1.5) {
+        m.active = false;
+        m.mesh.setEnabled(false);
+        m.respawnAt = this.now + RULES.chestRespawnSec;
+        p.hp = Math.min(RULES.maxHp, p.hp + RULES.medkitHp);
+        this.hud.message(`+${RULES.medkitHp} здоровья`, 1.2, "#6fd3ff");
+        this.sfx.pickup();
+      }
+    }
+  }
+
   // ---------------- Матч ----------------
 
   resetMatch(): void {
     this.now = 0;
     this.kills = 0;
+    this.matchLeft = RULES.protoMatchSeconds;
+    this.teamKills = { dragons: 0, snakes: 0 };
+    for (const c of ["dragons", "snakes"] as const) {
+      this.capture[c] = { by: null, t: 0, startedAt: 0 };
+      this.world.bases[c].flag.position.y = 7.2;
+    }
     this.state = "playing";
     this.deadTimer = 0;
     this.player.lives = RULES.lives;
@@ -309,8 +418,13 @@ export class Game {
     this.bots.forEach((b, i) => {
       const base = this.world.bases[b.clan];
       const sp = base.spawns[i % base.spawns.length];
+      b.lives = RULES.lives;
       b.spawn(sp, base.facing);
     });
+    for (const m of this.medkits) {
+      m.active = true;
+      m.mesh.setEnabled(true);
+    }
     for (const c of this.chests) {
       c.active = true;
       c.mesh.setEnabled(true);
@@ -392,6 +506,7 @@ export class Game {
       if (input.fire) this.tryShoot(!this.prevFire);
       this.prevFire = input.fire;
       this.pickupChests();
+      this.pickupMedkits();
     } else {
       this.prevFire = false;
       if (this.state === "dead") {
@@ -407,6 +522,7 @@ export class Game {
 
     const ctx = this.botContext();
     for (const b of this.bots) b.update(dt, ctx);
+    if (this.state === "playing" || this.state === "dead") this.updateMatch(dt);
 
     this.updateChests();
     this.effects.update(dt);
@@ -423,8 +539,23 @@ export class Game {
       status: this.aiming ? "Прицел" : p.crouching ? "Присел" : p.sprinting ? "Бег" : "",
       hidden,
       teams: this.teamCounts(),
+      timeLeft: this.matchLeft,
+      capture: this.captureInfo(),
     });
     input.endFrame();
+  }
+
+  /** Полоска захвата для HUD: важнее всего захват своего флага */
+  private captureInfo(): { text: string; t: number; color: string } | null {
+    const mine = this.player.clan;
+    const own = this.capture[mine];
+    if (own.by) return { text: "Твой флаг захватывают!", t: own.t, color: "#ff5a4a" };
+    const enemy = this.capture[enemyClan(mine)];
+    if (enemy.by) {
+      const me = enemy.by === this.playerTarget;
+      return { text: me ? "Захватываешь флаг — держись!" : "Наши захватывают флаг!", t: enemy.t, color: "#ffd23a" };
+    }
+    return null;
   }
 
   /** Сколько бойцов каждого клана сейчас в строю (игрок считается за свой клан) */
@@ -562,6 +693,7 @@ export class Game {
     this.hud.hit(killed);
     if (killed) {
       this.kills++;
+      this.teamKills[this.player.clan]++;
       this.sfx.kill();
       this.hud.message(`Враг повержен! (${this.kills})`, 1.4, "#ffe14a");
     } else {
@@ -576,6 +708,80 @@ export class Game {
     return p.crouching && this.now - p.lastShotAt > 1.5 && this.world.coverAt(p.position.x, p.position.z);
   }
 
+  // ---------------- Правила матча: флаг, выбывание, время ----------------
+
+  /** Клан выбыл: у всех ботов кончились жизни и игрок (если он из этого клана) тоже выбыл */
+  private clanOut(c: ClanId): boolean {
+    const botsOut = this.bots.filter((b) => b.clan === c).every((b) => !b.alive && b.lives <= 0);
+    const playerOut = this.player.clan !== c || (!this.player.alive && this.player.lives <= 0);
+    return botsOut && playerOut;
+  }
+
+  private endMatch(winner: ClanId | null, reason: string): void {
+    if (this.state === "over") return;
+    this.state = "over";
+    if (this.scoped) this.setScoped(false);
+    this.input.reset();
+    this.onGameOver({ winner, reason, won: winner === this.player.clan, kills: this.kills });
+  }
+
+  private updateMatch(dt: number): void {
+    // Время
+    this.matchLeft -= dt;
+    if (this.matchLeft <= 0) {
+      const k = this.teamKills;
+      if (k.dragons === k.snakes) this.endMatch(null, `Время вышло, ничья ${k.dragons}:${k.snakes}`);
+      else {
+        const w: ClanId = k.dragons > k.snakes ? "dragons" : "snakes";
+        this.endMatch(w, `Время вышло. Счёт ${k.dragons}:${k.snakes}`);
+      }
+      return;
+    }
+    // Выбывание целого клана
+    for (const c of ["dragons", "snakes"] as const) {
+      if (this.clanOut(c)) {
+        this.endMatch(enemyClan(c), `Все ${CLANS[c].name} выбыли`);
+        return;
+      }
+    }
+    // Захват флагов
+    for (const owner of ["dragons", "snakes"] as const) {
+      const base = this.world.bases[owner];
+      const cap = this.capture[owner];
+      const inZone = (t: Target) =>
+        t.alive && (t.pos.x - base.flagPoint.x) ** 2 + (t.pos.z - base.flagPoint.z) ** 2 < RULES.flagRadius ** 2;
+      const hitSince = (t: Target) =>
+        t.bot ? t.bot.lastHitAt > cap.startedAt : this.player.lastDamageAt > cap.startedAt;
+      if (cap.by && (!inZone(cap.by) || hitSince(cap.by))) {
+        if (cap.by === this.playerTarget) this.hud.message("Захват сорван!", 1.5, "#ff6b5a");
+        cap.by = null;
+        cap.t = 0;
+      }
+      if (!cap.by) {
+        const who = this.enemiesOf(owner).find(inZone);
+        if (who) {
+          cap.by = who;
+          cap.t = 0;
+          cap.startedAt = this.now;
+          if (who === this.playerTarget) this.hud.message("Захват флага! Продержись 10 секунд", 2, "#ffe14a");
+          else if (owner === this.player.clan) this.hud.message("Твой флаг захватывают! Защищай базу!", 2.5, "#ff6b5a");
+          // Защитники рядом бросаются к базе
+          for (const b of this.bots) if (b.clan === owner && b.alive) b.hear(base.flagPoint.clone());
+        }
+      }
+      if (cap.by) {
+        cap.t += dt / RULES.flagCaptureSec;
+        if (cap.t >= 1) {
+          this.endMatch(cap.by.clan, `Флаг клана ${CLANS[owner].name} захвачен!`);
+          return;
+        }
+      }
+      // Флаг опускается по флагштоку вместе с захватом — видно издалека
+      const want = 7.2 - 4.2 * cap.t;
+      base.flag.position.y += (want - base.flag.position.y) * Math.min(1, dt * 8);
+    }
+  }
+
   private botContext(): BotContext {
     return {
       now: this.now,
@@ -586,6 +792,11 @@ export class Game {
       },
       randomWalkPoint: (near, radius) => this.world.randomWalkPoint(Math.random, near, radius),
       shoot: (b, t) => this.botShoot(b, t),
+      objective: (b) => {
+        // Свой флаг захватывают — все бегут защищать; иначе штурмовики идут за чужим
+        if (this.capture[b.clan].by) return this.world.bases[b.clan].flagPoint;
+        return b.attacker ? this.world.bases[enemyClan(b.clan)].flagPoint : null;
+      },
       basePoint: (clan) => {
         const base = this.world.bases[clan];
         return { pos: base.spawns[Math.floor(Math.random() * base.spawns.length)], yaw: base.facing };
@@ -687,8 +898,8 @@ export class Game {
         const dmg = computeDamage(b.weapon, b.clan, t.clan);
         if (isPlayer) {
           if (this.state === "playing") this.damagePlayer(dmg);
-        } else {
-          victim!.takeDamage(dmg, b.position.clone(), this.now);
+        } else if (victim!.takeDamage(dmg, b.position.clone(), this.now)) {
+          this.teamKills[b.clan]++;
         }
         this.effects.impact(end, true);
       } else if (wHit?.hit) {
@@ -712,14 +923,15 @@ export class Game {
     this.hud.damage();
     this.sfx.hurt();
     if (died) {
+      this.teamKills[enemyClan(p.clan)]++;
       this.state = "dead";
       this.deadTimer = 0;
       this.input.reset();
       if (p.lives <= 0) {
-        this.state = "over";
         p.humanoid.deathT = 1;
         p.humanoid.animate(0, 0, false, 0, false);
-        this.onGameOver(this.kills);
+        if (this.clanOut(p.clan)) this.endMatch(enemyClan(p.clan), `Все ${CLANS[p.clan].name} выбыли`);
+        else this.endMatch(null, "Ты потратил все три жизни");
       } else {
         this.onDeath(p.lives);
       }
