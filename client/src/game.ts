@@ -1,4 +1,5 @@
 import {
+  PhotoDome,
   Color3,
   Color4,
   DirectionalLight,
@@ -133,6 +134,14 @@ export class Game {
     this.camera.inputs.clear();
     scene.activeCamera = this.camera;
     this.sun = sun;
+
+    // Небо: панорама с облаками (Poly Haven, CC0). Купол меньше дальности камеры и без тумана
+    const sky = new PhotoDome("sky", "./textures/sky.jpg", { resolution: 24, size: opts.touch ? 220 : 340 }, scene);
+    sky.material.fogEnabled = false;
+    sky.mesh.isPickable = false;
+    // Туман и фон под цвет горизонта панорамы, чтобы дальние деревья растворялись в небе
+    scene.fogColor = new Color3(0.78, 0.84, 0.92);
+    scene.clearColor = new Color4(0.78, 0.84, 0.92, 1);
   }
 
   /** Сборка игры: сначала грузим модели персонажей и оружия, потом строим мир */

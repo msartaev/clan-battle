@@ -17,6 +17,7 @@ import {
 import { CLANS, type ClanId } from "@clan-battle/shared";
 import { flatMat } from "./humanoid";
 import { getModels, type NatureId } from "./models";
+import { buildTreeBases, type TreeBases } from "./trees";
 import { makeRng } from "./utils";
 
 /** Тип объекта для выстрелов и видимости */
@@ -119,7 +120,7 @@ export class World {
   private mRoof2: StandardMaterial;
   private mConcrete: StandardMaterial;
 
-  constructor(private scene: Scene, detail = 1) {
+  constructor(private scene: Scene, private detail = 1) {
     // Старые процедурные доски брали 16 чисел из генератора карты — сохраняем раскладку
     for (let i = 0; i < 16; i++) this.rng();
     this.mWood = photoMat(scene, "weathered_planks");
@@ -141,7 +142,7 @@ export class World {
     this.buildHayField();
     this.scatterAmmo();
     this.buildStones();
-    this.scatterDecor(detail);
+    this.scatterDecor(this.detail);
 
     for (const m of this.staticMeshes) {
       m.freezeWorldMatrix();
@@ -574,21 +575,24 @@ export class World {
   /** Отдельный генератор для выбора моделей и декора, чтобы не сдвигать раскладку карты */
   private rngLook = makeRng(4242);
   private trunkCollider: Mesh | null = null;
+  private treeBases: TreeBases | null = null;
+
+  private trees(): TreeBases {
+    if (!this.treeBases) this.treeBases = buildTreeBases(this.scene, this.detail < 1 ? 0.35 : 1);
+    return this.treeBases;
+  }
 
   private placeTree(x: number, z: number): void {
-    const models = getModels();
     const pine = this.rng() < 0.55;
     const s = 0.8 + this.rng() * 0.5;
     const rot = this.rng() * Math.PI * 2;
     const pick = this.rngLook();
-    const id: NatureId = pine
-      ? pick < 0.5 ? "tree_pineDefaultA" : "tree_pineRoundC"
-      : pick < 0.4 ? "tree_default" : pick < 0.7 ? "tree_oak" : "tree_detailed";
-    // Высота дерева 5.5–8 м
-    const h = (pine ? 6.5 : 5.5) * s;
-    const tree = models.nature(id).createInstance(`tree_${x}_${z}`);
+    const tb = this.trees();
+    const list = pine ? tb.pine : tb.broad;
+    const base = list[Math.floor(pick * list.length) % list.length];
+    const tree = base.createInstance(`tree_${x}_${z}`);
     tree.position.set(x, 0, z);
-    tree.scaling.setAll(h);
+    tree.scaling.setAll(0.75 * s);
     tree.rotation.y = rot;
     // Крона закрывает обзор, но пули через неё летят
     this.register(tree, "soft", false, true);
@@ -614,11 +618,10 @@ export class World {
     const s = 0.8 + this.rng() * 0.5;
     const rot = this.rng() * 3;
     this.rngLook();
-    const id: NatureId = "plant_bushLarge";
-    const inst = getModels().nature(id).createInstance(`bush_${x}_${z}`);
+    const inst = this.trees().bush.createInstance(`bush_${x}_${z}`);
     inst.position.set(x, 0, z);
-    // Куст ~1.1 м в высоту и ~2.5 м в ширину: за ним можно присесть и спрятаться
-    inst.scaling.set(1.35 * s, 1.1 * s, 1.35 * s);
+    // Куст ~1.2 м в высоту и ~2 м в ширину: за ним можно присесть и спрятаться
+    inst.scaling.setAll(s);
     inst.rotation.y = rot;
     // Через куст можно пройти и спрятаться; он закрывает обзор, но не пули
     this.register(inst, "soft", false);

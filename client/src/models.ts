@@ -19,12 +19,6 @@ import type { ClanId, WeaponId } from "@clan-battle/shared";
 
 /** Природа из Kenney Nature Kit: деревья, кусты, камни и мелкие детали */
 export const NATURE = [
-  "tree_default",
-  "tree_oak",
-  "tree_detailed",
-  "tree_pineDefaultA",
-  "tree_pineRoundC",
-  "plant_bushLarge",
   "stone_largeA",
   "stone_largeC",
   "stone_tallB",
