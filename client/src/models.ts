@@ -55,8 +55,47 @@ type GunKey = keyof typeof GUN_FILES;
 
 /** Ключ модели бластера; у рогатки модели нет — она собирается в коде (slingshotMesh) */
 export function gunKey(weapon: WeaponId, clan: ClanId): GunKey | null {
-  if (weapon === "slingshot") return null;
+  if (weapon === "slingshot" || weapon === "sword") return null;
   return weapon === "clanWeapon" ? `clan_${clan}` : weapon;
+}
+
+/**
+ * Меч клана: лезвие вдоль +Z (как ствол), рукоять назад, гарда поперёк.
+ * Драконы — широкий клинок с медной гардой, Змеи — узкий зелёный; длина по уровню.
+ */
+export function swordMesh(scene: Scene, name: string, clan: ClanId, length: number): Mesh {
+  const steel = new StandardMaterial(`${name}_steel`, scene);
+  steel.diffuseColor = clan === "dragons" ? new Color3(0.78, 0.78, 0.8) : new Color3(0.6, 0.78, 0.62);
+  steel.specularColor = new Color3(0.9, 0.9, 0.9);
+  steel.specularPower = 64;
+  const guard = new StandardMaterial(`${name}_guard`, scene);
+  guard.diffuseColor = Color3.FromHexString(clan === "dragons" ? "#b8742a" : "#2f6b3a");
+  const grip = new StandardMaterial(`${name}_grip`, scene);
+  grip.diffuseColor = Color3.FromHexString("#3a2618");
+  const w = clan === "dragons" ? 0.06 + length * 0.04 : 0.035 + length * 0.03;
+  const parts: Mesh[] = [];
+  const blade = MeshBuilder.CreateBox(`${name}_blade`, { width: 0.015, height: w, depth: length }, scene);
+  blade.position.z = length / 2 + 0.05;
+  blade.material = steel;
+  parts.push(blade);
+  const tip = MeshBuilder.CreateCylinder(`${name}_tip`, { height: w * 1.2, diameterTop: 0, diameterBottom: w, tessellation: 3 }, scene);
+  tip.rotation.x = Math.PI / 2;
+  tip.position.z = length + 0.05 + w * 0.5;
+  tip.scaling.x = 0.25;
+  tip.material = steel;
+  parts.push(tip);
+  const g = MeshBuilder.CreateBox(`${name}_guard`, { width: 0.04, height: w + 0.1, depth: 0.03 }, scene);
+  g.position.z = 0.04;
+  g.material = guard;
+  parts.push(g);
+  const h = MeshBuilder.CreateCylinder(`${name}_grip`, { height: 0.13, diameter: 0.032, tessellation: 8 }, scene);
+  h.rotation.x = Math.PI / 2;
+  h.position.z = -0.04;
+  h.material = grip;
+  parts.push(h);
+  const m = Mesh.MergeMeshes(parts, true, true, undefined, false, true)!;
+  m.name = name;
+  return m;
 }
 
 /**

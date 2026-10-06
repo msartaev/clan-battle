@@ -44,7 +44,8 @@ export class Hud {
     $("btn-scope").textContent = clan === "dragons" ? "Труба" : "Бинокль";
     this.slots.forEach((s, i) => {
       const id = WEAPON_ORDER[i];
-      const short = id === "weakPistol" ? "Слабый" : id === "strongPistol" ? "Сильный" : id === "slingshot" ? "Рогатка" : c.weaponName;
+      const short =
+        id === "weakPistol" ? "Слабый" : id === "strongPistol" ? "Сильный" : id === "slingshot" ? "Рогатка" : id === "sword" ? "Меч" : c.weaponName;
       s.innerHTML = `<span>${i + 1}</span>${short}`;
     });
   }
@@ -70,16 +71,18 @@ export class Hud {
     apply();
   }
 
-  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; bombs: { weak: number; strong: number }; domeLeft: number; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; bombs: { weak: number; strong: number }; domeLeft: number; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
     const hp = Math.ceil(s.hp);
     this.set("hp", hp, () => {
       this.hpNum.textContent = String(hp);
       this.hpFill.style.width = `${(hp / RULES.maxHp) * 100}%`;
       this.hpFill.classList.toggle("low", hp <= 30);
     });
-    this.set("ammo", s.ammo, () => {
-      this.ammo.innerHTML = `<b>${s.ammo}</b> патронов`;
-      this.ammo.classList.toggle("empty", s.ammo <= 0);
+    const melee = s.weapon === "sword";
+    this.set("ammo", melee ? "melee" : s.ammo, () => {
+      // Меч патроны не тратит — показываем подсказку вместо счётчика
+      this.ammo.innerHTML = melee ? "держи — замах, отпусти — удар" : `<b>${s.ammo}</b> патронов`;
+      this.ammo.classList.toggle("empty", !melee && s.ammo <= 0);
     });
     const bombsText = `${s.bombs.weak}|${s.bombs.strong}|${Math.ceil(s.domeLeft)}`;
     this.set("bombs", bombsText, () => {
@@ -89,8 +92,8 @@ export class Hud {
     this.set("owned", s.owned.join(","), () => {
       this.slots.forEach((el, i) => (el.style.display = s.owned.includes(WEAPON_ORDER[i]) ? "" : "none"));
     });
-    this.set("weapon", s.weapon, () => {
-      this.weaponName.textContent = weaponDisplayName(s.weapon, this.clan);
+    this.set("weapon", `${s.weapon}${s.swordLevel}`, () => {
+      this.weaponName.textContent = weaponDisplayName(s.weapon, this.clan, s.swordLevel);
       const idx = WEAPON_ORDER.indexOf(s.weapon);
       this.slots.forEach((el, i) => el.classList.toggle("active", i === idx));
     });

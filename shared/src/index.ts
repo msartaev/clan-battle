@@ -85,7 +85,7 @@ export const RULES = {
   maxBombs: 3,
 } as const;
 
-export type WeaponId = "weakPistol" | "strongPistol" | "clanWeapon" | "slingshot";
+export type WeaponId = "weakPistol" | "strongPistol" | "clanWeapon" | "slingshot" | "sword";
 
 export interface WeaponDef {
   id: WeaponId;
@@ -132,6 +132,16 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     spread: 0.02,
     ammoPerShot: 1,
   },
+  // Меч: урон и название зависят от клана и уровня (SWORDS); патроны не тратит
+  sword: {
+    id: "sword",
+    name: "Меч",
+    damage: 7,
+    fireRate: 1.6,
+    range: 2.2,
+    spread: 0,
+    ammoPerShot: 0,
+  },
   // Рогатка (GDD): урон 10, стреляет медленнее пистолетов, разбивает стёкла; находят в сундуках
   slingshot: {
     id: "slingshot",
@@ -144,9 +154,29 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
 };
 
-export const WEAPON_ORDER: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon", "slingshot"];
+export const WEAPON_ORDER: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon", "slingshot", "sword"];
 
-export function weaponDisplayName(id: WeaponId, clan: ClanId): string {
+/** Мечи кланов (GDD «Мечи кланов»): уровни 1–4, в прототипе доступны 1 и 2 */
+export const SWORDS: Record<ClanId, { name: string; damage: number; length: number }[]> = {
+  dragons: [
+    { name: "Маленький ножик", damage: 7, length: 0.32 },
+    { name: "Большой нож", damage: 10, length: 0.55 },
+    { name: "Мечище", damage: 17, length: 0.9 },
+    { name: "Гигантский меч", damage: 25, length: 1.25 },
+  ],
+  snakes: [
+    { name: "Маленькие клинки", damage: 7, length: 0.32 },
+    { name: "Большой клинок", damage: 10, length: 0.55 },
+    { name: "Мечище", damage: 15, length: 0.9 },
+    { name: "Большой супер-меч", damage: 24, length: 1.25 },
+  ],
+};
+
+/** Меч: дальность удара, м; замах за столько секунд удваивает урон; щит гасит такую долю урона */
+export const MELEE = { reach: 2.2, chargeSec: 3, maxCharge: 2, shieldBlock: 0.5, swingSec: 0.35 } as const;
+
+export function weaponDisplayName(id: WeaponId, clan: ClanId, swordLevel = 1): string {
+  if (id === "sword") return SWORDS[clan][swordLevel - 1].name;
   return id === "clanWeapon" ? CLANS[clan].weaponName : WEAPONS[id].name;
 }
 

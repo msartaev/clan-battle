@@ -453,6 +453,45 @@ const browser = await chromium.launch({
   if (Math.abs(cellarTest.roomY + 2.6) > 0.1 || cellarTest.topStepY < -0.1) errors.push("[desktop] cellar test: пол подвала или ступеньки не работают");
   await page.evaluate(() => window.__game.resetMatch());
 
+  // Меч: замах с удержанием даёт больше урона; меч-щит гасит половину урона
+  const swordTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    const p = g.player;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    p.collider.position.set(0, 0, -25);
+    p.yaw = 0;
+    p.selectWeapon(4);
+    const b = g.bots[1];
+    b.spawn(new p.collider.position.constructor(0, 0, -23.6), Math.PI);
+    b.update = () => {};
+    await frames(2);
+    const hp0 = b.hp;
+    g.input.mouseFire = true;
+    await frames(30); // ~1.5 с замаха
+    g.input.mouseFire = false;
+    await frames(3);
+    const dealt = hp0 - b.hp;
+    delete b.update;
+    // Щит
+    p.invulnerableUntil = 0;
+    p.hp = 100;
+    g.input.mouseAim = true;
+    await frames(2);
+    g["damagePlayer"](20);
+    const blockedHp = p.hp;
+    g.input.mouseAim = false;
+    await frames(2);
+    return { weapon: p.weapon, dealt, blockedHp };
+  });
+  console.log("sword test:", swordTest);
+  if (swordTest.weapon !== "sword" || swordTest.dealt <= 7 || swordTest.blockedHp !== 90) errors.push("[desktop] sword test: меч или щит работают не так");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;

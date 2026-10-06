@@ -181,7 +181,9 @@ export class Player {
   }
 
   /** Что есть в инвентаре: рогатку ещё нужно найти в сундуке */
-  readonly owned = new Set<WeaponId>(["weakPistol", "strongPistol", "clanWeapon"]);
+  readonly owned = new Set<WeaponId>(["weakPistol", "strongPistol", "clanWeapon", "sword"]);
+  /** Уровень меча клана (1–2 в прототипе) */
+  swordLevel = 1;
 
   selectWeapon(idx: number): void {
     const id = WEAPON_ORDER[idx];

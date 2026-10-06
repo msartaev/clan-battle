@@ -1,3 +1,4 @@
+import type { WeaponId } from "@clan-battle/shared";
 import { Color3, InstancedMesh, Mesh, MeshBuilder, Scene, StandardMaterial, Vector3 } from "@babylonjs/core";
 
 /** Светящийся материал без освещения */
@@ -293,7 +294,11 @@ export class Sfx {
     }
   }
 
-  shot(weapon: "weakPistol" | "strongPistol" | "clanWeapon" | "slingshot", distanceVol = 1): void {
+  shot(weapon: WeaponId, distanceVol = 1): void {
+    if (weapon === "sword") {
+      this.swing();
+      return;
+    }
     if (weapon === "slingshot") {
       // Резинка рогатки: короткий «твэнг»
       this.tone(520, 0.09, 0.12 * distanceVol, 0.45);
@@ -313,6 +318,17 @@ export class Sfx {
 
   kill(): void {
     this.tone(660, 0.12, 0.12, 1.5);
+  }
+
+  /** Взмах меча: свист воздуха */
+  swing(power = 1): void {
+    this.burst(1800, 0.14, 0.12 * power, "bandpass");
+  }
+
+  /** Удар меча по цели */
+  clang(): void {
+    this.tone(980, 0.08, 0.12, 0.7);
+    this.burst(3000, 0.05, 0.1);
   }
 
   /** Звон разбитого стекла: высокий шум и пара звонких нот */

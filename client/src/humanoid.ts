@@ -11,8 +11,8 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import type { ClanId, WeaponId } from "@clan-battle/shared";
-import { CLANS } from "@clan-battle/shared";
-import { BODIES, type BodyId, getModels, gunKey, slingshotMesh } from "./models";
+import { CLANS, SWORDS } from "@clan-battle/shared";
+import { BODIES, type BodyId, getModels, gunKey, slingshotMesh, swordMesh } from "./models";
 
 /**
  * Человек Quaternius Ultimate Modular (CC0): нормальные пропорции, одежда, скелет.
@@ -96,6 +96,11 @@ export class Humanoid {
   private guns = new Map<WeaponId, TransformNode>();
   private muzzles = new Map<WeaponId, TransformNode>();
   private weapon: WeaponId = "weakPistol";
+  private swords: Mesh[] = [];
+  /** 0..1: идёт взмах мечом (1 — начало) */
+  private swingT = 0;
+  /** Меч держат ровно, как щит */
+  blocking = false;
   private pitch = 0;
   private crouchT = 0;
   private afterAnim: Observer<Scene> | null;
@@ -137,7 +142,7 @@ export class Humanoid {
     this.afterAnim = scene.onAfterAnimationsObservable.add(() => this.afterAnimations());
 
     // Бластеры в правой кисти; ориентацию подбираем по первому кадру позы прицела
-    const weapons: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon", "slingshot"];
+    const weapons: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon", "slingshot", "sword"];
     for (const w of weapons) {
       const holder = new TransformNode(`${name}_gun_${w}`, scene);
       // Оружие висит на корне персонажа (без зеркального масштаба glTF) и каждый кадр встаёт в кисть
@@ -152,6 +157,15 @@ export class Humanoid {
           m.material = models.gunMat;
           this.meshes.push(m as Mesh);
         }
+      } else if (w === "sword") {
+        // Два уровня меча; виден тот, что сейчас у бойца
+        SWORDS[look.clan].slice(0, 2).forEach((sw, lvl) => {
+          const m = swordMesh(scene, `${name}_sword${lvl + 1}`, look.clan, sw.length);
+          m.parent = holder;
+          m.setEnabled(lvl === 0);
+          this.swords.push(m);
+          this.meshes.push(m);
+        });
       } else {
         const sl = slingshotMesh(scene, `${name}_sling`);
         sl.parent = holder;
@@ -196,6 +210,26 @@ export class Humanoid {
         aimBone(this.bone(`UpperLeg.${s}`), thigh, c);
         aimBone(this.bone(`LowerLeg.${s}`), shin, c);
       }
+    }
+    // Меч: щит — клинок поперёк груди; взмах — рука идёт сверху-справа вниз-влево
+    if (this.weapon === "sword") {
+      const up = new Vector3(0, 1, 0);
+      let dir: Vector3;
+      if (this.swingT > 0) {
+        const s = this.swingT; // 1 → 0
+        dir = aim.add(right.scale(0.9 * (2 * s - 1))).add(up.scale(0.7 * s - 0.2)).normalize();
+      } else if (this.blocking) {
+        dir = aim.add(right.scale(-0.4)).add(up.scale(0.25)).normalize();
+      } else {
+        dir = aim.add(down.scale(0.35)).normalize();
+      }
+      aimBone(this.bone("UpperArm.R"), dir, 1);
+      aimBone(this.bone("LowerArm.R"), dir, 1);
+      aimBone(this.bone("Wrist.R"), dir, 1);
+      aimBone(this.bone("UpperArm.L"), down.add(fwd.scale(0.3)).add(right.scale(-0.2)).normalize(), 1);
+      aimBone(this.bone("LowerArm.L"), down.add(fwd.scale(0.4)).normalize(), 1);
+      this.placeGun(dir);
+      return;
     }
     // Руки: правая прямо по прицелу, левая — к правой кисти (хват двумя руками)
     aimBone(this.bone("UpperArm.R"), aim.add(right.scale(-0.05)).normalize(), 1);
@@ -247,7 +281,7 @@ export class Humanoid {
   }
 
   /** Бластер — в правой кисти, ствол по линии прицела */
-  private placeGun(): void {
+  private placeGun(dirWorld?: Vector3): void {
     const wrist = this.bone("Wrist.R");
     this.root.getWorldMatrix().invertToRef(tmpM);
     const p = Vector3.TransformCoordinates(wrist.getAbsolutePosition(), tmpM);
@@ -255,7 +289,22 @@ export class Humanoid {
     if (!g) return;
     g.position.copyFrom(p);
     g.position.y += 0.04;
-    g.rotationQuaternion = Quaternion.RotationYawPitchRoll(0, this.pitch, 0);
+    if (dirWorld) {
+      // Клинок по направлению руки (в системе корня персонажа)
+      const d = Vector3.TransformNormal(dirWorld, tmpM).normalize();
+      g.rotationQuaternion = Quaternion.FromLookDirectionLH(d, Vector3.Up());
+    } else {
+      g.rotationQuaternion = Quaternion.RotationYawPitchRoll(0, this.pitch, 0);
+    }
+  }
+
+  setSwordLevel(level: number): void {
+    this.swords.forEach((m, i) => m.setEnabled(i === level - 1));
+  }
+
+  /** Начать взмах (для вида от третьего лица) */
+  swing(): void {
+    this.swingT = 1;
   }
 
   setWeapon(id: WeaponId): void {
@@ -290,6 +339,7 @@ export class Humanoid {
     }
     this.body.rotation.x = 0;
     this.body.position.z = 0;
+    this.swingT = Math.max(0, this.swingT - dt / 0.35);
     this.crouchT += ((crouch ? 1 : 0) - this.crouchT) * Math.min(1, dt * 12);
     this.body.position.y = -0.42 * this.crouchT;
 

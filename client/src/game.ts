@@ -19,7 +19,9 @@ import {
 } from "@babylonjs/core";
 import {
   CLANS,
+  MELEE,
   RULES,
+  SWORDS,
   WEAPONS,
   computeDamage,
   enemyClan,
@@ -31,7 +33,7 @@ import { Bot, type BotContext, type Target } from "./bot";
 import { Effects, Sfx } from "./effects";
 import { Hud } from "./hud";
 import { flatMat } from "./humanoid";
-import { getModels, gunKey, loadModels, slingshotMesh } from "./models";
+import { getModels, gunKey, loadModels, slingshotMesh, swordMesh } from "./models";
 import type { Input } from "./input";
 import { Player } from "./player";
 import { applySpread, clamp, dirFromYawPitch, makeRng, rayVsVerticalSegment } from "./utils";
@@ -132,6 +134,10 @@ export class Game {
   };
   private medkits: AmmoChest[] = [];
   readonly animals: Animal[] = [];
+  /** Замах мечом: когда начали держать кнопку (или -1) */
+  private chargeFrom = -1;
+  /** Держим меч ровно, как щит */
+  blocking = false;
   /** Лечебные бомбы в запасе */
   bombs = { weak: 1, strong: 0 };
   /** Активный купол бессмертия (один на игрока) */
@@ -299,6 +305,16 @@ export class Game {
     const vmGun = (id: WeaponId, scale: number) =>
       mk(id, (g) => {
         const key = gunKey(id, this.opts.clan);
+        if (id === "sword") {
+          SWORDS[this.opts.clan].slice(0, 2).forEach((sw, lvl) => {
+            const m = swordMesh(this.scene, `vmSword${lvl + 1}`, this.opts.clan, sw.length);
+            m.parent = g;
+            m.position.set(0, -0.02, 0.0);
+            m.setEnabled(lvl === 0);
+            this.vmSwords.push(m);
+          });
+          return;
+        }
         if (!key) {
           const sl = slingshotMesh(this.scene, "vmSling");
           sl.parent = g;
@@ -319,6 +335,7 @@ export class Game {
     vmGun("strongPistol", 0.36);
     vmGun("clanWeapon", 0.42);
     vmGun("slingshot", 1);
+    vmGun("sword", 1);
     const muzzle = new TransformNode("vmMuzzle", this.scene);
     muzzle.parent = vm;
     muzzle.position.set(0, 0.04, 0.3);
@@ -419,6 +436,70 @@ export class Game {
         this.sfx.pickup();
       }
     }
+  }
+
+  // ---------------- Меч ----------------
+
+  /** Держишь кнопку — копится замах (до двойного урона за 3 с), отпускаешь — удар */
+  private updateMelee(fire: boolean): void {
+    if (this.inDome() || this.scoped || this.blocking) {
+      this.chargeFrom = -1;
+      return;
+    }
+    if (fire && this.chargeFrom < 0) this.chargeFrom = this.now;
+    // Подняли меч для замаха — в руках видно, как он отходит назад
+    const charge = this.chargeFrom >= 0 ? clamp((this.now - this.chargeFrom) / MELEE.chargeSec, 0, 1) : 0;
+    this.vmCharge = charge;
+    if (!fire && this.chargeFrom >= 0) {
+      this.chargeFrom = -1;
+      if (this.now < this.nextShotAt) return;
+      this.nextShotAt = this.now + MELEE.swingSec;
+      this.strike(1 + charge * (MELEE.maxCharge - 1));
+    }
+  }
+
+  private strike(mult: number): void {
+    const p = this.player;
+    const base = SWORDS[p.clan][p.swordLevel - 1].damage;
+    const dmg = Math.round(base * mult);
+    p.humanoid.swing();
+    this.vmSwing = 1;
+    this.sfx.swing(mult);
+    p.lastShotAt = this.now;
+    // Ближайшая цель перед собой в пределах досягаемости (сектор ~±50°)
+    const f = new Vector3(Math.sin(p.yaw), 0, Math.cos(p.yaw));
+    let best: { d: number; bot?: Bot; beast?: Animal } | null = null;
+    const consider = (pos: Vector3, extra: number, item: { bot?: Bot; beast?: Animal }) => {
+      const to = pos.subtract(p.position);
+      to.y = 0;
+      const d = to.length();
+      if (d > MELEE.reach + extra) return;
+      if (d > 0.3 && Vector3.Dot(to.scale(1 / d), f) < 0.64) return;
+      if (!best || d < best.d) best = { d, ...item };
+    };
+    for (const b of this.bots) if (b.alive && b.clan !== p.clan) consider(b.position, 0, { bot: b });
+    for (const a of this.animals) if (a.alive) consider(a.pos, a.info.radius, { beast: a });
+    const hit = best as { d: number; bot?: Bot; beast?: Animal } | null;
+    if (!hit) return;
+    this.sfx.clang();
+    if (hit.bot) {
+      this.damageBot(hit.bot, dmg);
+      this.effects.impact(hit.bot.position.add(new Vector3(0, 1.2, 0)), true);
+    } else if (hit.beast) {
+      const killed = hit.beast.takeDamage(dmg, this.playerPrey, this.now);
+      this.hud.hit(killed);
+      if (killed) this.hud.message(`${hit.beast.info.name} повержен`, 1.4, "#ffe14a");
+      this.effects.impact(hit.beast.pos.add(new Vector3(0, hit.beast.info.height * 0.6, 0)), true);
+    }
+    if (mult > 1.5) this.hud.message(`Сильный удар ×${mult.toFixed(1)}`, 0.9, "#ffe14a");
+  }
+
+  private vmCharge = 0;
+  private vmSwing = 0;
+  private vmSwords: TransformNode[] = [];
+
+  private setVmSwordLevel(level: number): void {
+    this.vmSwords.forEach((m, i) => m.setEnabled(i === level - 1));
   }
 
   // ---------------- Лечебные бомбы и купол ----------------
@@ -597,6 +678,10 @@ export class Game {
     this.deadTimer = 0;
     this.player.lives = RULES.lives;
     this.player.owned.delete("slingshot");
+    this.player.swordLevel = 1;
+    this.player.humanoid.setSwordLevel(1);
+    this.setVmSwordLevel(1);
+    this.chargeFrom = -1;
     this.bombs = { weak: 1, strong: 0 };
     this.removeDome();
     this.player.selectWeapon(0);
@@ -680,7 +765,11 @@ export class Game {
     if (input.cameraToggle && !this.scoped) this.setFirstPerson(!this.firstPerson);
     if (input.scopeToggle && this.state === "playing") this.setScoped(!this.scoped);
     if (this.state !== "playing" && this.scoped) this.setScoped(false);
-    this.aiming = input.aim && !this.scoped && this.state === "playing";
+    const sword = p.weapon === "sword";
+    // С мечом правая кнопка — щит, а не прицел
+    this.blocking = sword && input.aim && !this.scoped && this.state === "playing";
+    this.aiming = !sword && input.aim && !this.scoped && this.state === "playing";
+    p.humanoid.blocking = this.blocking;
     // В приближении поворот медленнее — пропорционально углу обзора, чтобы целиться точно
     const zoomK = this.camera.fov / BASE_FOV;
     input.lookDX *= zoomK;
@@ -691,7 +780,8 @@ export class Game {
 
     if (this.state === "playing") {
       p.update(dt, input, this.now, () => this.canStand(), (x, z, y) => this.world.floorAt(x, z, y));
-      if (input.fire) this.tryShoot(!this.prevFire);
+      if (p.weapon === "sword") this.updateMelee(input.fire);
+      else if (input.fire) this.tryShoot(!this.prevFire);
       this.prevFire = input.fire;
       this.pickupChests();
       this.pickupMedkits();
@@ -728,10 +818,11 @@ export class Game {
       kills: this.kills,
       lives: p.lives,
       fps: this.fpsShown,
-      status: this.aiming ? "Прицел" : p.crouching ? "Присел" : p.sprinting ? "Бег" : "",
+      status: this.blocking ? "Щит" : this.aiming ? "Прицел" : p.crouching ? "Присел" : p.sprinting ? "Бег" : "",
       hidden,
       teams: this.teamCounts(),
       owned: [...p.owned],
+      swordLevel: p.swordLevel,
       bombs: this.bombs,
       domeLeft: this.dome ? Math.max(0, this.dome.until - this.now) : 0,
       timeLeft: this.matchLeft,
@@ -790,6 +881,23 @@ export class Game {
       const bob = p.speed > 0.5 && p.grounded ? Math.sin(this.now * (p.sprinting ? 13 : 9)) * 0.012 : 0;
       this.viewmodel.position.set(0.22, -0.2 + bob - (p.crouching ? 0.01 : 0), 0.42 - this.vmKick * 0.06);
       this.viewmodel.rotation.x = -this.vmKick * 0.15;
+      this.viewmodel.rotation.y = 0;
+      this.viewmodel.rotation.z = 0;
+      if (p.weapon === "sword") {
+        this.vmSwing = Math.max(0, this.vmSwing - dt / MELEE.swingSec);
+        const s = this.vmSwing;
+        if (s > 0) {
+          // Взмах справа-сверху вниз-влево
+          this.viewmodel.rotation.set(0.9 * s - 0.4, 0.9 * (s - 0.5), -0.6 * s);
+        } else if (this.blocking) {
+          // Щит: клинок поперёк перед лицом
+          this.viewmodel.rotation.set(-0.15, -0.5, 1.4);
+          this.viewmodel.position.set(0.12, -0.12, 0.45);
+        } else {
+          // Замах: клинок уходит назад-вверх, пока держишь кнопку
+          this.viewmodel.rotation.set(-0.35 - this.vmCharge * 0.9, 0.2 * this.vmCharge, -0.2 * this.vmCharge);
+        }
+      }
       return;
     }
     // Третье лицо: камера за правым плечом, не проходит сквозь стены
@@ -1150,6 +1258,8 @@ export class Game {
   private damagePlayer(dmg: number): void {
     if (dmg <= 0) return;
     const p = this.player;
+    // Меч-щит гасит половину урона
+    if (this.blocking) dmg = Math.round(dmg * (1 - MELEE.shieldBlock));
     const hpBefore = p.hp;
     const died = p.takeDamage(dmg, this.now);
     if (p.hp === hpBefore && !died) return; // неуязвим после возрождения
@@ -1195,6 +1305,11 @@ export class Game {
         } else if (this.bombs.strong < RULES.maxBombs && roll > 0.62 && roll <= 0.72) {
           this.bombs.strong++;
           this.hud.message("Сильная лечебная бомба! (H)", 1.8, "#7dffb0");
+        } else if (p.swordLevel < 2 && roll < 0.15) {
+          p.swordLevel = 2;
+          p.humanoid.setSwordLevel(2);
+          this.setVmSwordLevel(2);
+          this.hud.message(`${SWORDS[p.clan][1].name}! Меч стал сильнее`, 2.2, "#ffe14a");
         } else if (!p.owned.has("slingshot") && this.rng() < 0.5) {
           p.owned.add("slingshot");
           this.hud.message(this.input.isTouch ? "Нашёл рогатку! Кнопка «Оружие»" : "Нашёл рогатку! Клавиша 4", 2.2, "#ffe14a");
