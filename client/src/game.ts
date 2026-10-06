@@ -139,7 +139,11 @@ export class Game {
   /** Держим меч ровно, как щит */
   blocking = false;
   /** Лечебные бомбы в запасе */
-  bombs = { weak: 1, strong: 0 };
+  bombs = { weak: 1, strong: 0, boom: 1, frost: 1 };
+  /** Летящие боевые бомбы */
+  private thrown: { mesh: Mesh; pos: Vector3; vel: Vector3; kind: "boom" | "frost"; clan: ClanId }[] = [];
+  /** Ледяные глыбы вокруг замороженных */
+  private ice: { mesh: Mesh; until: number; follow: Vector3 }[] = [];
   /** Активный купол бессмертия (один на игрока) */
   dome: { mesh: Mesh; center: Vector3; until: number; total: number } | null = null;
   private playerPrey!: Prey;
@@ -561,6 +565,123 @@ export class Game {
     }
   }
 
+  // ---------------- Боевые бомбы ----------------
+
+  private throwCombat(kind: "boom" | "frost" | "combat"): void {
+    const k = kind === "combat" ? (this.bombs.boom > 0 ? "boom" : "frost") : kind;
+    if (this.bombs[k] <= 0) {
+      this.hud.message(k === "boom" ? "Нет взрывных бомб" : "Нет замораживающих бомб", 1.2, "#ffb347");
+      return;
+    }
+    if (this.inDome()) {
+      this.hud.message("Из-под купола не бросают", 1.2, "#7dffb0");
+      return;
+    }
+    this.bombs[k]--;
+    const p = this.player;
+    // Бросок по дуге из руки по направлению взгляда (чуть вверх)
+    const dir = dirFromYawPitch(p.yaw, p.pitch - 0.25);
+    const pos = p.position.add(new Vector3(0, p.eyeHeight - 0.2, 0)).add(dir.scale(0.6));
+    const mesh = MeshBuilder.CreateSphere("bomb", { diameter: 0.22, segments: 8 }, this.scene);
+    mesh.material = flatMat(this.scene, k === "boom" ? "#2a2a2a" : "#7fd8ff", k === "boom" ? 0 : 0.4);
+    mesh.isPickable = false;
+    mesh.position.copyFrom(pos);
+    this.thrown.push({ mesh, pos, vel: dir.scale(16), kind: k, clan: p.clan });
+    this.sfx.swing(0.7);
+  }
+
+  private updateThrown(dt: number): void {
+    for (let i = this.thrown.length - 1; i >= 0; i--) {
+      const t = this.thrown[i];
+      t.vel.y -= 14 * dt;
+      const step = t.vel.scale(dt);
+      const len = step.length();
+      // Врезалась в стену, стекло или землю — срабатывает
+      const hit = this.scene.pickWithRay(new Ray(t.pos, step.scale(1 / len), len), isSolid, false);
+      let at: Vector3 | null = null;
+      if (hit?.hit && hit.pickedPoint) at = hit.pickedPoint.clone();
+      t.pos.addInPlace(step);
+      const floor = this.world.floorAt(t.pos.x, t.pos.z, t.pos.y);
+      if (!at && t.pos.y <= floor + 0.1) at = new Vector3(t.pos.x, floor + 0.1, t.pos.z);
+      t.mesh.position.copyFrom(t.pos);
+      if (at) {
+        t.mesh.dispose();
+        this.thrown.splice(i, 1);
+        if (t.kind === "boom") this.explode(at, t.clan);
+        else this.freezeAt(at, t.clan);
+      }
+    }
+    for (let i = this.ice.length - 1; i >= 0; i--) {
+      const c = this.ice[i];
+      c.mesh.position.set(c.follow.x, c.follow.y + 0.95, c.follow.z);
+      if (this.now >= c.until) {
+        c.mesh.dispose();
+        this.ice.splice(i, 1);
+      }
+    }
+  }
+
+  /** Взрыв: урон по площади (не по своим), звери тоже, окна в радиусе бьются */
+  private explode(at: Vector3, clan: ClanId): void {
+    const R = RULES.blastRadius;
+    const vol = clamp(1 - Vector3.Distance(at, this.player.position) / 80, 0.15, 1);
+    this.sfx.boom(vol);
+    this.effects.explosion(at, R);
+    const dmgAt = (pos: Vector3) => {
+      const d = Vector3.Distance(at, pos.add(new Vector3(0, 0.9, 0)));
+      if (d > R) return 0;
+      return Math.round(RULES.blastDamage * (1 - (d / R) * 0.67));
+    };
+    for (const b of this.bots) {
+      if (!b.alive || b.clan === clan) continue;
+      const dmg = dmgAt(b.position);
+      if (dmg > 0) this.damageBot(b, dmg);
+    }
+    for (const a of this.animals) {
+      if (!a.alive) continue;
+      const dmg = dmgAt(a.pos);
+      if (dmg > 0) a.takeDamage(dmg, this.playerPrey, this.now);
+    }
+    if (this.player.clan !== clan) {
+      const dmg = dmgAt(this.player.position);
+      if (dmg > 0) this.damagePlayer(dmg);
+    }
+    for (const w of this.world.windows) if (!w.broken && Vector3.Distance(w.center, at) < R) this.shatter(w);
+    // Камера вздрагивает, если взрыв рядом
+    if (vol > 0.6) this.vmKick = 1;
+  }
+
+  /** Заморозка: враги и звери в зоне стоят во льду 10 секунд */
+  private freezeAt(at: Vector3, clan: ClanId): void {
+    const R = RULES.frostRadius;
+    const vol = clamp(1 - Vector3.Distance(at, this.player.position) / 80, 0.15, 1);
+    this.sfx.freeze(vol);
+    this.effects.frost(at, R);
+    const until = this.now + RULES.frostSec;
+    const iceMat = flatMat(this.scene, "#bfefff", 0.35);
+    iceMat.alpha = 0.45;
+    const encase = (pos: Vector3, h: number, r: number) => {
+      const m = MeshBuilder.CreateBox("ice", { width: r * 2.2, height: h, depth: r * 2.2 }, this.scene);
+      m.material = iceMat;
+      m.isPickable = false;
+      this.ice.push({ mesh: m, until, follow: pos });
+    };
+    let n = 0;
+    for (const b of this.bots) {
+      if (!b.alive || b.clan === clan || Vector3.Distance(b.position, at) > R) continue;
+      b.frozenUntil = until;
+      encase(b.position, 1.95, 0.4);
+      n++;
+    }
+    for (const a of this.animals) {
+      if (!a.alive || Vector3.Distance(a.pos, at) > R) continue;
+      a.frozenUntil = until;
+      encase(a.pos, a.info.height + 0.3, a.info.radius + 0.2);
+      n++;
+    }
+    if (n > 0) this.hud.message(`Заморожено: ${n}`, 1.4, "#9fe8ff");
+  }
+
   // ---------------- Окна ----------------
 
   /** Стекло разбито: звон, осколки, проём свободен */
@@ -682,7 +803,11 @@ export class Game {
     this.player.humanoid.setSwordLevel(1);
     this.setVmSwordLevel(1);
     this.chargeFrom = -1;
-    this.bombs = { weak: 1, strong: 0 };
+    this.bombs = { weak: 1, strong: 0, boom: 1, frost: 1 };
+    for (const t of this.thrown) t.mesh.dispose();
+    this.thrown = [];
+    for (const c of this.ice) c.mesh.dispose();
+    this.ice = [];
     this.removeDome();
     this.player.selectWeapon(0);
     this.respawnPlayer();
@@ -786,7 +911,8 @@ export class Game {
       this.pickupChests();
       this.pickupMedkits();
       this.tryVault();
-      if (input.bomb) this.throwBomb(input.bomb);
+      if (input.bomb === "boom" || input.bomb === "frost" || input.bomb === "combat") this.throwCombat(input.bomb);
+      else if (input.bomb) this.throwBomb(input.bomb);
     } else {
       this.prevFire = false;
       if (this.state === "dead") {
@@ -804,6 +930,7 @@ export class Game {
     for (const b of this.bots) b.update(dt, ctx);
     this.updateAnimals(dt);
     this.updateDome(dt);
+    this.updateThrown(dt);
     if (this.state === "playing" || this.state === "dead") this.updateMatch(dt);
 
     this.updateChests();
@@ -1299,7 +1426,13 @@ export class Game {
         this.sfx.pickup();
         // Рогатка «часто попадается в сундуках»: половина шансов, пока её нет
         const roll = this.rng();
-        if (this.bombs.weak < RULES.maxBombs && roll > 0.72) {
+        if (roll > 0.88 && this.bombs.boom < RULES.maxBombs) {
+          this.bombs.boom++;
+          this.hud.message("Взрывная бомба! (F)", 1.8, "#ffb347");
+        } else if (roll > 0.82 && roll <= 0.88 && this.bombs.frost < RULES.maxBombs) {
+          this.bombs.frost++;
+          this.hud.message("Замораживающая бомба! (R)", 1.8, "#9fe8ff");
+        } else if (this.bombs.weak < RULES.maxBombs && roll > 0.72) {
           this.bombs.weak++;
           this.hud.message("Лечебная бомба! (G)", 1.8, "#7dffb0");
         } else if (this.bombs.strong < RULES.maxBombs && roll > 0.62 && roll <= 0.72) {

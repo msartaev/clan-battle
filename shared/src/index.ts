@@ -83,6 +83,12 @@ export const RULES = {
   domeHealPerSec: 6,
   /** Сколько бомб каждого вида можно носить */
   maxBombs: 3,
+  /** Взрывная: радиус и урон в центре (к краю падает до трети) */
+  blastRadius: 5,
+  blastDamage: 70,
+  /** Замораживающая: радиус и сколько секунд враги стоят во льду */
+  frostRadius: 5.5,
+  frostSec: 10,
 } as const;
 
 export type WeaponId = "weakPistol" | "strongPistol" | "clanWeapon" | "slingshot" | "sword";

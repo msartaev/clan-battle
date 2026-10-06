@@ -23,8 +23,11 @@ export class Input {
   weaponCycle = 0;
   /** Подзорная труба / бинокль: включить или выключить */
   scopeToggle = false;
-  /** Бросить лечебную бомбу: "weak" — G, "strong" — H, "any" — кнопка на телефоне */
-  bomb: "weak" | "strong" | "any" | null = null;
+  /**
+   * Бомба: лечебные "weak" (G) / "strong" (H) / "any" (кнопка «Купол»);
+   * боевые "boom" (F) / "frost" (R) / "combat" (кнопка «Бомба»)
+   */
+  bomb: "weak" | "strong" | "any" | "boom" | "frost" | "combat" | null = null;
 
   mouseSensitivity = 0.0022;
   touchSensitivity = 0.0055;
@@ -113,6 +116,8 @@ export class Input {
       if (e.code === "KeyB") this.scopeToggle = true;
       if (e.code === "KeyG") this.bomb = "weak";
       if (e.code === "KeyH") this.bomb = "strong";
+      if (e.code === "KeyF") this.bomb = "boom";
+      if (e.code === "KeyR") this.bomb = "frost";
       const m = /^Digit([1-9])$/.exec(e.code);
       if (m) this.weaponSelect = Number(m[1]) - 1;
     });
@@ -317,6 +322,7 @@ export class Input {
     });
     btn("btn-scope", () => (this.scopeToggle = true));
     btn("btn-dome", () => (this.bomb = "any"));
+    btn("btn-bomb", () => (this.bomb = "combat"));
     btn("btn-weapon", () => (this.weaponCycle = 1));
     root.classList.add("on");
   }

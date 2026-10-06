@@ -164,6 +164,37 @@ export class Effects {
     pool.emit(pos, 16, kind === "fire" ? 4 : 3, 0.18, 0.55, kind === "fire" ? -2 : 4, kind === "fire" ? 0.8 : 0.2);
   }
 
+  /** Взрыв: огненный шар, искры и пыль во все стороны */
+  explosion(pos: Vector3, radius: number): void {
+    this.fire.emit(pos, 60, 9, 0.35, 0.8, -3, 2);
+    this.dust.emit(pos, 40, 6, 0.3, 1.2, 4, 1.5);
+    this.hit.emit(pos, 30, 12, 0.12, 0.5, 6, 2);
+    this.ring(pos, radius, "#ffb347", 0.35);
+  }
+
+  /** Заморозка: голубая вспышка-кольцо и снежинки */
+  frost(pos: Vector3, radius: number): void {
+    this.ring(pos, radius, "#9fe8ff", 0.6);
+    this.dust.emit(pos, 40, 5, 0.2, 1.0, -1, 2);
+  }
+
+  /** Расходящаяся полупрозрачная сфера — видно зону действия бомбы */
+  private ring(pos: Vector3, radius: number, hex: string, life: number): void {
+    const m = MeshBuilder.CreateSphere("blast", { diameter: 2, segments: 12 }, this.scene);
+    let mat = this.blastMats.get(hex);
+    if (!mat) {
+      mat = glowMat(this.scene, `blastMat${hex}`, hex);
+      mat.alpha = 0.45;
+      this.blastMats.set(hex, mat);
+    }
+    m.material = mat;
+    m.isPickable = false;
+    m.position.copyFrom(pos);
+    this.blasts.push({ mesh: m, t: 0, life, radius });
+  }
+  private blasts: { mesh: Mesh; t: number; life: number; radius: number }[] = [];
+  private blastMats = new Map<string, StandardMaterial>();
+
   /** Летящий заряд кланового оружия: огонь дракона или яд змеи */
   orb(from: Vector3, to: Vector3, kind: OrbKind, speed: number, onHit: () => void): void {
     let mesh = this.orbFree[kind].pop();
@@ -213,6 +244,17 @@ export class Effects {
         this.orbs.splice(i, 1);
         if (o.kind !== "stone") this.clanBurst(o.to, o.kind);
         o.onHit();
+      }
+    }
+    for (let i = this.blasts.length - 1; i >= 0; i--) {
+      const b = this.blasts[i];
+      b.t += dt;
+      const k = Math.min(1, b.t / b.life);
+      b.mesh.scaling.setAll(b.radius * (0.3 + 0.7 * k));
+      b.mesh.visibility = 1 - k;
+      if (k >= 1) {
+        b.mesh.dispose();
+        this.blasts.splice(i, 1);
       }
     }
     this.dust.update(dt);
@@ -318,6 +360,19 @@ export class Sfx {
 
   kill(): void {
     this.tone(660, 0.12, 0.12, 1.5);
+  }
+
+  /** Взрыв бомбы: низкий гул и треск */
+  boom(distanceVol = 1): void {
+    this.burst(400, 0.6, 0.45 * distanceVol);
+    this.tone(70, 0.5, 0.3 * distanceVol, 0.5);
+  }
+
+  /** Заморозка: звенящий высокий аккорд */
+  freeze(distanceVol = 1): void {
+    this.tone(1500, 0.4, 0.08 * distanceVol, 1.6);
+    this.tone(2200, 0.5, 0.06 * distanceVol, 1.3);
+    this.burst(6000, 0.3, 0.1 * distanceVol);
   }
 
   /** Взмах меча: свист воздуха */

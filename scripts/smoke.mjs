@@ -492,6 +492,47 @@ const browser = await chromium.launch({
   if (swordTest.weapon !== "sword" || swordTest.dealt <= 7 || swordTest.blockedHp !== 90) errors.push("[desktop] sword test: меч или щит работают не так");
   await page.evaluate(() => window.__game.resetMatch());
 
+  // Боевые бомбы: бросок долетает и взрывается; взрыв ранит врагов (не своих); заморозка останавливает
+  const bombTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    const p = g.player;
+    const V = p.collider.position.constructor;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    p.collider.position.set(30, 0, -30);
+    p.yaw = -2.3;
+    p.pitch = 0.3;
+    p.invulnerableUntil = g.now + 999;
+    g.input.bomb = "boom";
+    await frames(2);
+    const boomLeft = g.bombs.boom;
+    const thrownNow = g["thrown"].length;
+    await frames(40);
+    const landed = g["thrown"].length === 0;
+    const enemy = g.bots.find((b) => b.clan !== p.clan);
+    const ally = g.bots.find((b) => b.clan === p.clan);
+    enemy.spawn(new V(20, 0, 20), 0);
+    ally.spawn(new V(21, 0, 20), 0);
+    g["explode"](new V(20.5, 0.2, 20), p.clan);
+    const enemyHp = enemy.hp;
+    const allyHp = ally.hp;
+    enemy.spawn(new V(-20, 0, -20), 0);
+    g["freezeAt"](new V(-20, 0.2, -20), p.clan);
+    const x0 = enemy.position.x;
+    const z0 = enemy.position.z;
+    await frames(40);
+    const moved = Math.hypot(enemy.position.x - x0, enemy.position.z - z0);
+    return { boomLeft, thrownNow, landed, enemyHp, allyHp, frozen: enemy.frozenUntil > g.now, moved: +moved.toFixed(2) };
+  });
+  console.log("bomb test:", bombTest);
+  if (bombTest.boomLeft !== 0 || bombTest.thrownNow !== 1 || !bombTest.landed || bombTest.enemyHp >= 100 || bombTest.allyHp !== 100 || !bombTest.frozen || bombTest.moved > 0.05)
+    errors.push("[desktop] bomb test: боевые бомбы работают не так");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;

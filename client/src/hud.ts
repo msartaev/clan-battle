@@ -71,7 +71,7 @@ export class Hud {
     apply();
   }
 
-  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; bombs: { weak: number; strong: number }; domeLeft: number; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; bombs: { weak: number; strong: number; boom: number; frost: number }; domeLeft: number; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
     const hp = Math.ceil(s.hp);
     this.set("hp", hp, () => {
       this.hpNum.textContent = String(hp);
@@ -84,10 +84,10 @@ export class Hud {
       this.ammo.innerHTML = melee ? "держи — замах, отпусти — удар" : `<b>${s.ammo}</b> патронов`;
       this.ammo.classList.toggle("empty", !melee && s.ammo <= 0);
     });
-    const bombsText = `${s.bombs.weak}|${s.bombs.strong}|${Math.ceil(s.domeLeft)}`;
+    const bombsText = `${s.bombs.weak}|${s.bombs.strong}|${s.bombs.boom}|${s.bombs.frost}|${Math.ceil(s.domeLeft)}`;
     this.set("bombs", bombsText, () => {
       const dome = s.domeLeft > 0 ? `<span class="dome-on">Купол: ${Math.ceil(s.domeLeft)} с</span> · ` : "";
-      this.bombsEl.innerHTML = `${dome}Лечебные бомбы: ${s.bombs.weak} слаб. · ${s.bombs.strong} сильн.`;
+      this.bombsEl.innerHTML = `${dome}Купол ${s.bombs.weak}+${s.bombs.strong} · 💥 ${s.bombs.boom} · 🧊 ${s.bombs.frost}`;
     });
     this.set("owned", s.owned.join(","), () => {
       this.slots.forEach((el, i) => (el.style.display = s.owned.includes(WEAPON_ORDER[i]) ? "" : "none"));

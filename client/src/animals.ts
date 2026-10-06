@@ -111,6 +111,8 @@ export class Animal {
   private attackCd = 0;
   private deadTimer = 0;
   private home: Vector3;
+  /** Заморожен бомбой до этого момента */
+  frozenUntil = -1;
 
   constructor(
     scene: Scene,
@@ -167,6 +169,7 @@ export class Animal {
   private play(name: string, loop = true, speed = 1): void {
     const g = this.clips.get(name) ?? this.clips.get("Idle");
     if (!g) return;
+    if (g.speedRatio === 0) g.speedRatio = speed;
     if (this.current === name) {
       g.speedRatio = speed;
       return;
@@ -208,6 +211,10 @@ export class Animal {
       return;
     }
     const pos = this.pos;
+    if (now < this.frozenUntil) {
+      for (const c of this.clips.values()) c.speedRatio = 0;
+      return;
+    }
     // Волк сам ищет ближайшую жертву; остальные злятся только на обидчика
     if (this.info.hostile) {
       if (!this.target || !this.target.alive || Vector3.DistanceSquared(this.target.pos, pos) > 28 * 28) {

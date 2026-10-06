@@ -41,6 +41,8 @@ export class Bot {
   lives: number = RULES.lives;
   /** Когда последний раз ранили — захват флага сбрасывается */
   lastHitAt = -999;
+  /** Заморожен бомбой до этого момента: не ходит и не стреляет */
+  frozenUntil = -1;
   /** Штурмовик: в свободное время идёт захватывать вражеский флаг */
   attacker = false;
   state: BotState = "wander";
@@ -194,6 +196,13 @@ export class Bot {
         const b = ctx.basePoint(this.clan);
         this.spawn(b.pos, b.yaw);
       }
+      return;
+    }
+
+    // Заморожен: стоит ледяной статуей
+    if (ctx.now < this.frozenUntil) {
+      this.speed = 0;
+      this.humanoid.animate(dt, 0, false, this.aimPitch, false);
       return;
     }
 

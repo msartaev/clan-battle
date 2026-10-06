@@ -894,3 +894,7 @@ body.touch #capture {
 body.touch #bombs {
   font-size: 12px;
 }
+
+#btn-bomb {
+  right: calc(max(14px, env(safe-area-inset-right)) + 372px);
+}
