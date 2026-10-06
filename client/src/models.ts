@@ -1,4 +1,14 @@
-import { AssetContainer, Color3, LoadAssetContainerAsync, Mesh, Scene, StandardMaterial, Texture, TransformNode } from "@babylonjs/core";
+import {
+  AssetContainer,
+  Color3,
+  LoadAssetContainerAsync,
+  Mesh,
+  PBRMaterial,
+  Scene,
+  StandardMaterial,
+  Texture,
+  TransformNode,
+} from "@babylonjs/core";
 import "@babylonjs/loaders/glTF/2.0";
 import type { ClanId, WeaponId } from "@clan-battle/shared";
 
@@ -6,12 +16,6 @@ import type { ClanId, WeaponId } from "@clan-battle/shared";
  * Готовые модели Kenney (CC0): блочные персонажи и бластеры.
  * Грузятся один раз до сборки сцены, дальше Humanoid их только клонирует.
  */
-
-/** Облики персонажей (буква = texture-X.png из Blocky Characters) по кланам */
-export const CLAN_SKINS: Record<ClanId, string[]> = {
-  dragons: ["b", "k", "g", "d", "p"],
-  snakes: ["c", "m", "f", "n", "o", "l"],
-};
 
 /** Природа из Kenney Nature Kit: деревья, кусты, камни и мелкие детали */
 export const NATURE = [
@@ -65,11 +69,15 @@ export function gunKey(weapon: WeaponId, clan: ClanId): GunKey {
   return weapon === "clanWeapon" ? `clan_${clan}` : weapon;
 }
 
+/** Люди Quaternius Ultimate Modular (CC0): одетые, на общем скелете, с клипами Idle/Walk/Run */
+export const BODIES = ["casual_hoodie", "casual_2", "worker", "w_casual", "beach", "w_formal"] as const;
+export type BodyId = (typeof BODIES)[number];
+
 export interface Models {
-  character: AssetContainer;
+  humans: Record<BodyId, AssetContainer>;
+  /** Плоский материал части тела; цвет из модели или подменённый (одежда в цвет клана) */
+  humanMat(body: BodyId, part: string, color?: string): StandardMaterial;
   guns: Record<GunKey, AssetContainer>;
-  /** Материал персонажа по букве облика */
-  skinMat(letter: string): StandardMaterial;
   /** Общий материал бластеров (одна палитра на всех) */
   gunMat: StandardMaterial;
   /**
@@ -96,17 +104,24 @@ function paletteTexture(url: string, scene: Scene): Texture {
 
 export async function loadModels(scene: Scene): Promise<Models> {
   const load = (path: string) => LoadAssetContainerAsync(BASE + path, scene);
-  const [character, ...rest] = await Promise.all([
-    load("blocky/character.glb"),
+  const [...rest0] = await Promise.all([
+    ...BODIES.map((b) => load(`humans/${b}.glb`)),
     ...Object.values(GUN_FILES).map((f) => load(`blasters/${f}.glb`)),
     ...NATURE.map((n) => load(`nature/${n}.glb`)),
   ]);
+  const humanList = rest0.slice(0, BODIES.length);
+  const rest = rest0.slice(BODIES.length);
   const gunList = rest.slice(0, Object.keys(GUN_FILES).length);
   const natureList = rest.slice(gunList.length);
   const guns = Object.fromEntries(Object.keys(GUN_FILES).map((k, i) => [k, gunList[i]])) as Record<GunKey, AssetContainer>;
 
   // glTF даёт PBR-материалы; на телефонах простой StandardMaterial заметно дешевле
-  for (const c of [character, ...gunList, ...natureList]) {
+  // Цвета людей берём из их PBR-материалов (текстур у них нет), сами материалы не трогаем
+  const humanColor = new Map<string, Color3>();
+  BODIES.forEach((body, i) => {
+    for (const m of humanList[i].materials) humanColor.set(`${body}|${m.name}`, (m as PBRMaterial).albedoColor.toGammaSpace());
+  });
+  for (const c of [...gunList, ...natureList]) {
     // Имена материалов природы нужны для перекраски — у неё их не трогаем
     if (natureList.includes(c)) {
       for (const g of c.animationGroups) g.dispose();
@@ -119,7 +134,6 @@ export async function loadModels(scene: Scene): Promise<Models> {
     c.animationGroups.length = 0;
   }
 
-  const skinMats = new Map<string, StandardMaterial>();
   const gunMat = new StandardMaterial("gunMat", scene);
   gunMat.diffuseTexture = paletteTexture(`${BASE}blasters/Textures/colormap.png`, scene);
   gunMat.specularColor.set(0.08, 0.08, 0.08);
@@ -137,8 +151,22 @@ export async function loadModels(scene: Scene): Promise<Models> {
   };
   const natureBases = new Map<NatureId, Mesh>();
 
+  const humanMats = new Map<string, StandardMaterial>();
+
   models = {
-    character,
+    humans: Object.fromEntries(BODIES.map((b, i) => [b, humanList[i]])) as Record<BodyId, AssetContainer>,
+    humanMat(body, part, color) {
+      const key = `${body}|${part}|${color ?? ""}`;
+      let m = humanMats.get(key);
+      if (!m) {
+        // StandardMaterial дешевле PBR на телефонах; цвет — из модели или цвет клана
+        m = new StandardMaterial(`human_${key}`, scene);
+        m.diffuseColor = color ? Color3.FromHexString(color) : (humanColor.get(`${body}|${part}`) ?? new Color3(0.7, 0.7, 0.7));
+        m.specularColor.set(0.05, 0.05, 0.05);
+        humanMats.set(key, m);
+      }
+      return m;
+    },
     nature(id) {
       let base = natureBases.get(id);
       if (base) return base;
@@ -165,16 +193,6 @@ export async function loadModels(scene: Scene): Promise<Models> {
     },
     guns,
     gunMat,
-    skinMat(letter) {
-      let m = skinMats.get(letter);
-      if (!m) {
-        m = new StandardMaterial(`skin_${letter}`, scene);
-        m.diffuseTexture = paletteTexture(`${BASE}blocky/Textures/texture-${letter}.png`, scene);
-        m.specularColor.set(0.04, 0.04, 0.04);
-        skinMats.set(letter, m);
-      }
-      return m;
-    },
   };
   return models;
 }

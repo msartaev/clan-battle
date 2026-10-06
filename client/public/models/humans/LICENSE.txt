@@ -1,0 +1,4 @@
+Ultimate Modular Men and Ultimate Modular Women by Quaternius (https://quaternius.com)
+License: CC0 1.0 Universal (public domain), https://creativecommons.org/publicdomain/zero/1.0/
+Files taken from https://github.com/smallkhk/Busy (public/models, LICENSE-Quaternius.txt),
+decompressed from EXT_meshopt_compression with glTF-Transform.
