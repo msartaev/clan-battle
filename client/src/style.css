@@ -794,3 +794,30 @@ body.scoped #slots {
 #btn-aim.toggled {
   background: rgba(255, 210, 60, 0.55);
 }
+
+/* ----- Выбор качества графики на стартовом экране ----- */
+#quality {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  align-items: center;
+  margin: 4px 0 14px;
+  font-size: 14px;
+  opacity: 0.95;
+}
+#quality button {
+  padding: 5px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+#quality button.selected {
+  background: var(--clan, #e8551c);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 700;
+}

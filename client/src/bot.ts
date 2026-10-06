@@ -173,7 +173,7 @@ export class Bot {
   update(dt: number, ctx: BotContext): void {
     if (this.state === "dead") {
       this.deadTimer += dt;
-      this.humanoid.deathT = clamp(this.deadTimer / 0.5, 0, 1);
+      this.humanoid.deathT = clamp(this.deadTimer / 1.1, 0, 1);
       this.humanoid.animate(dt, 0, false, 0, false);
       if (this.deadTimer > 2.2) this.humanoid.setEnabled(false);
       this.allyMark?.setEnabled(false);

@@ -197,6 +197,23 @@ function bushMesh(scene: Scene, leaves: StandardMaterial): Mesh {
 }
 
 /** @param detail 1 — полная детализация, 0.5 — телефоны и режим ?low */
+/** Пучок травы: две перекрещённые карточки 1×0.5 м с настоящими травинками и колосками */
+export function grassTuftMesh(scene: Scene): Mesh {
+  const leaves = foliageMat(scene, "grass_tuft", "#e2ecd0");
+  const cards = new Cards();
+  const up = Vector3.Up();
+  for (const yaw of [0, Math.PI / 2]) {
+    const a = new Vector3(Math.cos(yaw), 0, Math.sin(yaw)).scale(0.5);
+    const b = new Vector3(0, 0.25, 0);
+    // Нормаль вверх: трава освещается как поверхность земли, без тёмных «боков»
+    cards.add(new Vector3(0, 0.25, 0), a, b, up);
+  }
+  const m = cards.toMesh("grassTuft", scene);
+  m.material = leaves;
+  m.isPickable = false;
+  return m;
+}
+
 export function buildTreeBases(scene: Scene, detail = 1): TreeBases {
   // Дальние деревья — упрощённые копии (в 3–4 раза меньше карточек): прозрачные листья дорогие для видеокарты
   const withLod = (near: Mesh, far: Mesh) => {

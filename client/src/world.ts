@@ -17,7 +17,8 @@ import {
 import { CLANS, type ClanId } from "@clan-battle/shared";
 import { flatMat } from "./humanoid";
 import { getModels, type NatureId } from "./models";
-import { buildTreeBases, type TreeBases } from "./trees";
+import { buildTreeBases, grassTuftMesh, type TreeBases } from "./trees";
+import { buildCarMesh, type CarKind } from "./cars";
 import { makeRng } from "./utils";
 
 /** Тип объекта для выстрелов и видимости */
@@ -501,32 +502,11 @@ export class World {
   }
 
   private buildCar(i: number, x: number, z: number, rotY: number, color: string): void {
-    const body = MeshBuilder.CreateBox(`carBody${i}`, { width: 1.8, height: 0.7, depth: 4.2 }, this.scene);
-    body.position.y = 0.65;
-    const cabin = MeshBuilder.CreateBox(`carCabin${i}`, { width: 1.6, height: 0.62, depth: 2.2 }, this.scene);
-    cabin.position.set(0, 1.3, -0.2);
-    const glass = MeshBuilder.CreateBox(`carGlass${i}`, { width: 1.64, height: 0.4, depth: 2.0 }, this.scene);
-    glass.position.set(0, 1.33, -0.2);
-    const wheels: Mesh[] = [];
-    for (const [wx, wz] of [
-      [-0.85, 1.35],
-      [0.85, 1.35],
-      [-0.85, -1.35],
-      [0.85, -1.35],
-    ]) {
-      const wh = MeshBuilder.CreateCylinder(`wheel${i}`, { diameter: 0.7, height: 0.3, tessellation: 10 }, this.scene);
-      wh.rotation.z = Math.PI / 2;
-      wh.position.set(wx, 0.35, wz);
-      wheels.push(wh);
-    }
-    body.material = flatMat(this.scene, color);
-    cabin.material = body.material;
-    glass.material = flatMat(this.scene, "#26323d");
-    for (const wh of wheels) wh.material = flatMat(this.scene, "#1b1b1b");
-    const car = Mesh.MergeMeshes([body, cabin, glass, ...wheels], true, true, undefined, false, true)!;
-    car.name = `car${i}`;
+    const kinds: CarKind[] = ["sedan", "suv", "pickup", "sedan", "suv", "sedan"];
+    const car = buildCarMesh(this.scene, `car${i}`, kinds[i % kinds.length], color);
     car.position.set(x, 0, z);
-    car.rotation.y = rotY;
+    // Модель вытянута вдоль x, а раскладка задаёт «перёд» по z
+    car.rotation.y = rotY - Math.PI / 2;
     car.computeWorldMatrix(true);
     car.receiveShadows = true;
     this.register(car, "world", true, true);
@@ -554,7 +534,7 @@ export class World {
       [-6, 5.6, Math.PI / 2, "#d6b02f"],
       [7.5, -14, 0, "#b8322a"],
       [31, 5.6, Math.PI / 2, "#3f8f8a"],
-      [-36, 5.6, -Math.PI / 2, "#7a4fb0"],
+      [-36, 5.6, -Math.PI / 2, "#3b4a3f"],
     ];
     cars.forEach(([x, z, r, c], i) => this.buildCar(i, x, z, r, c));
 
@@ -578,7 +558,7 @@ export class World {
   private treeBases: TreeBases | null = null;
 
   private trees(): TreeBases {
-    if (!this.treeBases) this.treeBases = buildTreeBases(this.scene, this.detail < 1 ? 0.35 : 1);
+    if (!this.treeBases) this.treeBases = buildTreeBases(this.scene, this.detail);
     return this.treeBases;
   }
 
@@ -651,21 +631,16 @@ export class World {
    */
   private scatterDecor(detail: number): void {
     const r = this.rngLook;
-    const decor: [NatureId, number, number][] = [
-      // модель, сколько штук на полной детализации, высота, м
-      ["grass_large", 260, 0.35],
-      ["grass_leafsLarge", 120, 0.3],
-      ["flower_redA", 60, 0.4],
-      ["flower_yellowA", 60, 0.4],
-      ["flower_purpleA", 50, 0.4],
-      ["mushroom_redGroup", 25, 0.3],
+    const decor: [NatureId | "grass", number, number][] = [
+      // модель, сколько штук на полной детализации, масштаб (для травы — множитель к 1×0.5 м)
+      ["grass", 420, 1.0],
       ["stump_round", 18, 0.45],
       ["log", 12, 0.4],
     ];
     for (const [id, count, h] of decor) {
       // Тонкие экземпляры: вся россыпь одной модели — одна сетка и один вызов отрисовки,
       // без проверки видимости каждой травинки на процессоре
-      const base = getModels().nature(id);
+      const base = id === "grass" ? grassTuftMesh(this.scene) : getModels().nature(id);
       const n = Math.round(count * detail);
       const matrices: Matrix[] = [];
       for (let i = 0; i < n; i++) {

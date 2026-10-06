@@ -4,3 +4,4 @@ clay_roof_tiles_02, grey_roof_tiles, reed_roof_04, forest_ground_04.
 Leaf atlases LeafSet024, LeafSet019 by ambientCG (https://ambientcg.com), CC0 — composited into foliage_broad.png and foliage_pine.png.
 Bark: bark_brown_02, pine_bark from Poly Haven, CC0.
 Sky: kloofendal_48d_partly_cloudy_puresky (Poly Haven HDRI, tonemapped JPG), CC0.
+Grass: Foliage001/002/003/006 by ambientCG, CC0 — composited into grass_tuft.png.

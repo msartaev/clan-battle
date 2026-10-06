@@ -9,7 +9,20 @@ const $ = (id: string) => document.getElementById(id)!;
 const params = new URLSearchParams(location.search);
 const testMode = params.has("test");
 const touch = params.has("touch") || isTouchDevice();
-const lowFx = touch || params.has("low");
+// Качество графики: выбор игрока хранится в браузере; «Авто» — средне на телефоне, красиво на ПК
+type Quality = "auto" | "high" | "medium" | "low";
+const QUALITY_DETAIL = { high: 1, medium: 0.35, low: 0.15 } as const;
+let quality: Quality = "auto";
+try {
+  const q = localStorage.getItem("cb_quality") as Quality | null;
+  if (q && (q === "auto" || q in QUALITY_DETAIL)) quality = q;
+} catch {
+  /* хранилище недоступно — остаётся «Авто» */
+}
+if (params.has("low")) quality = "medium";
+function resolvedQuality(): "high" | "medium" | "low" {
+  return quality === "auto" ? (touch ? "medium" : "high") : quality;
+}
 // Размер вражеской команды (союзников на одного меньше — игрок тоже в команде): по умолчанию 5 на 5
 const botCount = Math.max(1, Math.min(8, Number(params.get("bots")) || 5));
 
@@ -33,6 +46,29 @@ function selectClan(c: ClanId): void {
 }
 clanButtons.forEach((b) => b.addEventListener("click", () => selectClan(b.dataset.clan as ClanId)));
 selectClan(clan);
+
+// ----- Качество графики -----
+const qualityButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("#quality button"));
+function selectQuality(q: Quality): void {
+  quality = q;
+  qualityButtons.forEach((b) => b.classList.toggle("selected", b.dataset.q === q));
+  try {
+    localStorage.setItem("cb_quality", q);
+  } catch {
+    /* не сохранилось — не страшно */
+  }
+}
+qualityButtons.forEach((b) =>
+  b.addEventListener("click", () => {
+    selectQuality(b.dataset.q as Quality);
+    // Другое качество — мир строится заново при следующем запуске
+    if (game) {
+      game.dispose();
+      game = null;
+    }
+  }),
+);
+qualityButtons.forEach((b) => b.classList.toggle("selected", b.dataset.q === quality));
 
 // ----- Полноэкранный режим (по желанию; ошибки игнорируем) -----
 async function enterFullscreen(): Promise<void> {
@@ -73,7 +109,8 @@ function startGame(): void {
         game = null;
       }
       if (!game) {
-        game = await Game.create(canvas, input, { clan, touch, lowFx, testMode, botCount });
+        const q = resolvedQuality();
+        game = await Game.create(canvas, input, { clan, touch, lowFx: q !== "high", detail: QUALITY_DETAIL[q], testMode, botCount });
         game.onDeath = (lives) => {
           $("dead-text").textContent =
             lives === 1 ? "Осталась последняя жизнь. Возрождение на базе…" : `Осталось жизней: ${lives}. Возрождение на базе…`;

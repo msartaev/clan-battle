@@ -40,6 +40,8 @@ export interface GameOptions {
   touch: boolean;
   /** Слабое устройство: без теней, меньше частиц, ниже разрешение */
   lowFx: boolean;
+  /** Детализация мира: 1 — «Красиво», 0.35 — «Средне», 0.15 — «Быстро» */
+  detail: number;
   /** Режим автотестов: без паузы при потере курсора */
   testMode: boolean;
   botCount: number;
@@ -114,7 +116,9 @@ export class Game {
     }, false);
     // На телефоне рисуем в пониженном разрешении — это главный выигрыш в FPS
     const dpr = window.devicePixelRatio || 1;
-    this.engine.setHardwareScalingLevel(opts.touch ? Math.max(1, dpr / 1.25) * 1.15 : 1);
+    // «Быстро» рисует ещё в 1.4 раза меньше пикселей
+    const fast = opts.detail < 0.3 ? 1.4 : 1;
+    this.engine.setHardwareScalingLevel((opts.touch ? Math.max(1, dpr / 1.25) * 1.15 : 1) * fast);
 
     const scene = new Scene(this.engine);
     this.scene = scene;
@@ -169,7 +173,7 @@ export class Game {
   private build(): void {
     const { scene, opts, sun } = this;
     // На телефонах и в режиме ?low мелких деталей (трава, цветы) втрое меньше
-    this.world = new World(scene, opts.lowFx || opts.touch ? 0.35 : 1);
+    this.world = new World(scene, opts.detail);
     this.effects = new Effects(scene, opts.lowFx || opts.touch);
     this.player = new Player(scene, opts.clan);
     this.hud = new Hud(opts.clan);
@@ -392,7 +396,7 @@ export class Game {
       this.prevFire = false;
       if (this.state === "dead") {
         this.deadTimer += dt;
-        p.humanoid.deathT = clamp(this.deadTimer / 0.5, 0, 1);
+        p.humanoid.deathT = clamp(this.deadTimer / 1.1, 0, 1);
         p.humanoid.animate(dt, 0, false, 0, false);
         if (this.deadTimer >= RULES.playerRespawnSec) {
           this.respawnPlayer();

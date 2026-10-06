@@ -24,12 +24,6 @@ export const NATURE = [
   "stone_tallB",
   "stump_round",
   "log",
-  "flower_redA",
-  "flower_yellowA",
-  "flower_purpleA",
-  "grass_large",
-  "grass_leafsLarge",
-  "mushroom_redGroup",
 ] as const;
 export type NatureId = (typeof NATURE)[number];
 

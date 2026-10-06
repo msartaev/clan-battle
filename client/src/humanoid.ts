@@ -171,7 +171,10 @@ export class Humanoid {
   }
 
   private afterAnimations(): void {
-    if (this.deathT > 0) return;
+    if (this.deathT > 0) {
+      this.deathPose();
+      return;
+    }
     this.root.computeWorldMatrix(true);
     const fwd = this.root.getDirection(Vector3.Forward()).normalize();
     const right = this.root.getDirection(Vector3.Right()).normalize();
@@ -195,6 +198,46 @@ export class Humanoid {
     aimBone(this.bone("UpperArm.L"), aim.add(right.scale(0.55)).normalize(), 1);
     aimBone(this.bone("LowerArm.L"), aim.add(right.scale(0.45)).normalize(), 1);
     aimBone(this.bone("Wrist.R"), aim, 1);
+    this.placeGun();
+  }
+
+  /**
+   * Смерть: колени подламываются, тело оседает и заваливается на спину,
+   * руки опускаются и раскидываются в стороны. Всё поверх замершего клипа.
+   */
+  private deathPose(): void {
+    const t = Math.min(1, this.deathT);
+    const k1 = Math.min(1, t / 0.35); // колени
+    const k2 = Math.max(0, Math.min(1, (t - 0.25) / 0.75)); // падение
+    const fall = k2 * k2 * (3 - 2 * k2); // плавный старт и мягкая «посадка»
+    this.body.rotation.x = (-Math.PI / 2) * fall;
+    // Сначала оседаем на подогнутых ногах, потом ложимся; бёдра остаются примерно на месте
+    this.body.position.y = -0.38 * k1 * (1 - fall) + 0.12 * fall;
+    this.body.position.z = -0.55 * fall;
+
+    this.root.computeWorldMatrix(true);
+    this.body.computeWorldMatrix(true);
+    // Направления в мире с учётом наклона тела
+    const up = this.body.getDirection(Vector3.Up()).normalize();
+    const fwd = this.body.getDirection(Vector3.Forward()).normalize();
+    const right = this.body.getDirection(Vector3.Right()).normalize();
+    const down = up.scale(-1);
+    // Ноги: бедро вперёд, голень вниз — как подкошенный; к концу падения ноги чуть выпрямляются
+    const bend = k1 * (1 - 0.6 * fall);
+    const thigh = down.add(fwd.scale(0.9 * bend)).normalize();
+    const shin = down.add(fwd.scale(-0.5 * bend)).normalize();
+    for (const s of ["L", "R"]) {
+      aimBone(this.bone(`UpperLeg.${s}`), thigh, 1);
+      aimBone(this.bone(`LowerLeg.${s}`), shin, 1);
+    }
+    // Руки: сперва висят, потом раскинуты в стороны (по телу — вверх-наружу)
+    for (const [s, side] of [["L", -1], ["R", 1]] as const) {
+      const hang = down.add(right.scale(0.25 * side)).normalize();
+      const spread = right.scale(side).add(up.scale(0.45)).add(fwd.scale(-0.2)).normalize();
+      const dir = Vector3.Lerp(hang, spread, fall).normalize();
+      aimBone(this.bone(`UpperArm.${s}`), dir, 1);
+      aimBone(this.bone(`LowerArm.${s}`), dir, 1);
+    }
     this.placeGun();
   }
 
@@ -232,14 +275,16 @@ export class Humanoid {
   animate(dt: number, speed: number, crouch: boolean, pitch: number, airborne: boolean): void {
     this.pitch = pitch;
     if (this.deathT > 0) {
-      // Падение назад, клипы замирают
-      const t = Math.min(1, this.deathT);
-      this.body.rotation.x = (-Math.PI / 2) * t * t;
-      this.body.position.y = 0.15 * t;
-      for (const g of this.move.values()) g.speedRatio = 0;
+      // Клипы замирают на стойке; позу смерти строит deathPose() после анимации
+      for (const [c, g] of this.move) {
+        g.weight = c === "Idle" ? 1 : 0;
+        this.weights.set(c, g.weight);
+        g.speedRatio = 0;
+      }
       return;
     }
     this.body.rotation.x = 0;
+    this.body.position.z = 0;
     this.crouchT += ((crouch ? 1 : 0) - this.crouchT) * Math.min(1, dt * 12);
     this.body.position.y = -0.42 * this.crouchT;
 
