@@ -48,7 +48,7 @@ clanButtons.forEach((b) => b.addEventListener("click", () => selectClan(b.datase
 selectClan(clan);
 
 // ----- Уровни: следующий открывается победой на предыдущем -----
-const MAX_LEVEL = 3;
+const MAX_LEVEL = 4;
 let unlocked = 1;
 try {
   unlocked = Math.min(MAX_LEVEL, Math.max(1, Number(localStorage.getItem("cb_unlocked")) || 1));

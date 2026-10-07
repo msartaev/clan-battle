@@ -95,7 +95,7 @@ export class Player {
 
     const moving = Math.abs(input.moveX) + Math.abs(input.moveZ) > 0.05;
     this.sprinting = input.sprint && !this.crouching && moving && input.moveZ > 0.1;
-    const speed = this.crouching ? MOVEMENT.crouchSpeed : this.sprinting ? MOVEMENT.sprintSpeed : MOVEMENT.walkSpeed;
+    const speed = (this.crouching ? MOVEMENT.crouchSpeed : this.sprinting ? MOVEMENT.sprintSpeed : MOVEMENT.walkSpeed) * this.speedMul;
 
     const sin = Math.sin(this.yaw);
     const cos = Math.cos(this.yaw);
@@ -179,6 +179,9 @@ export class Player {
     }
     return false;
   }
+
+  /** Множитель скорости (сугроб замедляет) */
+  speedMul = 1;
 
   /** Что есть в инвентаре: рогатку ещё нужно найти в сундуке */
   readonly owned = new Set<WeaponId>(["weakPistol", "strongPistol", "clanWeapon", "sword", "sticky"]);

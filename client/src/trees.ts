@@ -214,7 +214,8 @@ export function grassTuftMesh(scene: Scene): Mesh {
   return m;
 }
 
-export function buildTreeBases(scene: Scene, detail = 1): TreeBases {
+/** snowy — заснеженные ели и кусты для зимнего уровня */
+export function buildTreeBases(scene: Scene, detail = 1, snowy = false): TreeBases {
   // Дальние деревья — упрощённые копии (в 3–4 раза меньше карточек): прозрачные листья дорогие для видеокарты
   const withLod = (near: Mesh, far: Mesh) => {
     far.isVisible = false;
@@ -223,9 +224,9 @@ export function buildTreeBases(scene: Scene, detail = 1): TreeBases {
   };
   const oakBark = barkMat(scene, "bark_brown_02");
   const pineBark = barkMat(scene, "pine_bark");
-  const broadLeaves = foliageMat(scene, "foliage_broad", "#d6e6c0");
-  const pineLeaves = foliageMat(scene, "foliage_pine", "#c8d8c0");
-  const bushLeaves = foliageMat(scene, "foliage_broad", "#a8c090");
+  const broadLeaves = foliageMat(scene, "foliage_broad", snowy ? "#dde6e8" : "#d6e6c0");
+  const pineLeaves = foliageMat(scene, "foliage_pine", snowy ? "#e6f0f2" : "#c8d8c0");
+  const bushLeaves = foliageMat(scene, "foliage_broad", snowy ? "#d0dcdc" : "#a8c090");
   return {
     broad: [1, 2, 3].map((k) => withLod(broadTree(scene, k, oakBark, broadLeaves, detail), broadTree(scene, k, oakBark, broadLeaves, detail * 0.3))),
     pine: [4, 5].map((k) => withLod(pineTree(scene, k, pineBark, pineLeaves, detail), pineTree(scene, k, pineBark, pineLeaves, detail * 0.3))),

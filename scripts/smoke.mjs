@@ -131,7 +131,9 @@ const browser = await chromium.launch({
     g.bots.forEach((b, i) =>
       b.clan !== g.player.clan ? b.spawn(new V(40 + i, 0, 38), Math.PI * 1.2) : b.spawn(new V(-55 + i, 0, -55), 0),
     );
-    await new Promise((r) => setTimeout(r, 8000));
+    // Кадры, а не время: на программном рендере 8 секунд — это всего десяток кадров
+    const u = g.engine.frameId + 220;
+    while (g.engine.frameId < u && g.player.hp >= 100 && g.player.lives === 3) await new Promise((r) => setTimeout(r, 20));
     return { hp: g.player.hp, lives: g.player.lives, state: g.state, botStates: g.bots.map((b) => b.state) };
   });
   console.log("bot test:", botTest);
@@ -463,6 +465,11 @@ const browser = await chromium.launch({
       const u = g.engine.frameId + n;
       while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
     };
+    // Остальные боты далеко и без бомб: заморозка игрока сорвала бы замах (тест «мигал»)
+    g.bots.forEach((x) => {
+      x.spawn(new p.collider.position.constructor(-50, 0, 60), 0);
+      x.bombs = { boom: 0, frost: 0 };
+    });
     p.collider.position.set(0, 0, -25);
     p.yaw = 0;
     p.selectWeapon(4);
@@ -476,7 +483,7 @@ const browser = await chromium.launch({
     g.input.mouseFire = false;
     await frames(3);
     const dealt = hp0 - b.hp;
-    delete b.update;
+    const dbg = { frozen: g["playerFrozenUntil"] > g.now, state: g.state, alive: p.alive, dist: +Math.hypot(b.position.x - p.position.x, b.position.z - p.position.z).toFixed(2), bAlive: b.alive };
     // Щит
     p.invulnerableUntil = 0;
     p.hp = 100;
@@ -486,10 +493,13 @@ const browser = await chromium.launch({
     const blockedHp = p.hp;
     g.input.mouseAim = false;
     await frames(2);
-    return { weapon: p.weapon, dealt, blockedHp };
+    // Бот-мишень оживает только после проверки щита (иначе его выстрел портил замер)
+    delete b.update;
+    return { weapon: p.weapon, dealt, blockedHp, ...dbg };
   });
   console.log("sword test:", swordTest);
-  if (swordTest.weapon !== "sword" || swordTest.dealt <= 7 || swordTest.blockedHp !== 90) errors.push("[desktop] sword test: меч или щит работают не так");
+  if (swordTest.weapon !== "sword" || swordTest.dealt <= 7 || swordTest.blockedHp !== 90)
+    errors.push("[desktop] sword test: меч или щит работают не так " + JSON.stringify(swordTest));
   await page.evaluate(() => window.__game.resetMatch());
 
   // Боевые бомбы: бросок долетает и взрывается; взрыв ранит врагов (не своих); заморозка останавливает
@@ -885,6 +895,64 @@ const browser = await chromium.launch({
   });
   console.log("level 3:", l3);
   if (l3.level !== 3 || l3.allies !== 0 || l3.enemies !== 4 || l3.medkitMoved < 1 || !l3.won) errors.push("[level3] соло-уровень работает не так");
+  await ctx.close();
+}
+
+// ---------- Уровень 4: снег, каждый сам за себя ----------
+{
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  const page = await ctx.newPage();
+  watch(page, "level4");
+  await page.goto(URL + "?test&level=4", { waitUntil: "load" });
+  await page.click("#play");
+  await page.waitForFunction(() => !!window.__game, null, { timeout: 180000 });
+  const l4 = await page.evaluate(async () => {
+    const g = window.__game;
+    const p = g.player;
+    const V = p.collider.position.constructor;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    const kit = [...p.owned].sort().join(",");
+    const bombs = g.bombs.weak + g.bombs.boom + g.bombs.frost;
+    const bots = g.bots.length;
+    // Боты воюют и между собой: у бота среди врагов есть другие боты
+    const foes = g["foesOf"](g.bots[0]).filter((t) => t.bot).length;
+    g.input.scopeToggle = true;
+    await frames(2);
+    const scoped = g.scoped;
+    // Сугроб: стоим в центре — проваливаемся и замерзаем, минус жизнь
+    const d = g.world.drifts[0];
+    g.bots.forEach((b) => b.spawn(new V(-45, 0, 45), 0));
+    p.invulnerableUntil = 0;
+    const lives0 = p.lives;
+    p.collider.position.set(d.x, 0, d.z);
+    for (let k = 0; k < 200 && p.lives === lives0; k++) {
+      p.collider.position.set(d.x, 0, d.z);
+      await frames(1);
+    }
+    const livesAfter = p.lives;
+    // Все соперники выбыли — победа
+    g.state = "playing";
+    p.alive = true;
+    let result = null;
+    const orig = g.onGameOver;
+    g.onGameOver = (r) => (result = r);
+    // Всех соперников — сразу в выбывшие (часть могла уже лежать и ждать возрождения)
+    for (const b of g.bots) {
+      b.lives = 0;
+      b.hp = 0;
+      b.state = "dead";
+    }
+    await frames(3);
+    g.onGameOver = orig;
+    return { level: g.world.level, kit, bombs, bots, foes, scoped, drifts: g.world.drifts.length, lives0, livesAfter, won: result?.won };
+  });
+  console.log("level 4:", l4);
+  if (l4.level !== 4 || l4.kit !== "clanWeapon,slingshot" || l4.bombs !== 0 || l4.bots !== 3 || l4.foes !== 2 || l4.scoped || l4.livesAfter !== l4.lives0 - 1 || !l4.won)
+    errors.push("[level4] снежный уровень работает не так");
+  await page.screenshot({ path: path.join(shots, "10-level4-snow.png") });
   await ctx.close();
 }
 

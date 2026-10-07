@@ -151,6 +151,10 @@ function photoMat(scene: Scene, file: string, tint = "#ffffff"): StandardMateria
 
 export class World {
   readonly windows: WindowPane[] = [];
+  /** Сугробы уровня 4: в них проваливаешься и замерзаешь */
+  readonly drifts: { x: number; z: number; r: number }[] = [];
+  /** Точки появления в режиме «каждый сам за себя» */
+  readonly ffaSpawns: Vector3[] = [];
   /** Где не сыпать траву и пни (бетон, полы) */
   private noDecor: Rect[] = [];
   /** Стволы деревьев — по ним рубят дерево для торговца */
@@ -179,12 +183,12 @@ export class World {
 
   constructor(private scene: Scene, private detail = 1, level = 1) {
     this.level = level;
-    MAP_HALF = level === 2 ? 100 : level === 3 ? 45 : 64;
+    MAP_HALF = level === 2 ? 100 : level === 3 ? 45 : level === 4 ? 50 : 64;
     // Подвал переезжает вместе с деревней (на уровне 2 она в северо-западном углу)
     const vo = level === 2 ? VILLAGE2 : { x: 0, z: 0 };
     CELLAR.room = { x0: -17.4 + vo.x, x1: -10.6 + vo.x, z0: 6.6 + vo.z, z1: 11.4 + vo.z };
     CELLAR.hole = { x0: -14.6 + vo.x, x1: -11.2 + vo.x, z0: 9.6 + vo.z, z1: 10.8 + vo.z };
-    if (level === 3) {
+    if (level === 3 || level === 4) {
       // Деревни нет — «люк» уводим за забор, крошечный и незаметный
       CELLAR.room = { x0: 70, x1: 70.2, z0: 70, z1: 70.2 };
       CELLAR.hole = { x0: 70, x1: 70.2, z0: 70, z1: 70.2 };
@@ -203,6 +207,8 @@ export class World {
       this.buildLevel2();
     } else if (level === 3) {
       this.buildLevel3();
+    } else if (level === 4) {
+      this.buildLevel4();
     } else {
       this.buildRoads();
       this.buildBorder();
@@ -261,7 +267,7 @@ export class World {
     // прокручиваем его столько же раз, чтобы раскладка карты не съехала
     for (let i = 0; i < 1400 * 4; i++) this.rng();
     projectUV(ground, 6);
-    ground.material = photoMat(this.scene, "leafy_grass", "#d8e8c8");
+    ground.material = this.level === 4 ? photoMat(this.scene, "snow_02", "#f4f8ff") : photoMat(this.scene, "leafy_grass", "#d8e8c8");
     ground.receiveShadows = true;
     this.register(ground, "world", false);
   }
@@ -819,7 +825,7 @@ export class World {
   private treeBases: TreeBases | null = null;
 
   private trees(): TreeBases {
-    if (!this.treeBases) this.treeBases = buildTreeBases(this.scene, this.detail);
+    if (!this.treeBases) this.treeBases = buildTreeBases(this.scene, this.detail, this.level === 4);
     return this.treeBases;
   }
 
@@ -1096,6 +1102,74 @@ export class World {
       const p = this.findFree(-96, -96, 96, 96, 3);
       if (p) this.placeStone(p.x, p.z);
     }
+  }
+
+  // ---------- Уровень 4: снег, каждый сам за себя ----------
+
+  private buildLevel4(): void {
+    this.buildBorder();
+    // Четыре угла — четыре бойца
+    const c = 38;
+    for (const [x, z] of [[-c, -c], [c, c], [-c, c], [c, -c]]) this.ffaSpawns.push(new Vector3(x, 0, z));
+    // Баз и флагов нет: заглушки с точками появления, чтобы общий код возрождения работал
+    const dummy = (clan: ClanId, i: number): BaseInfo => {
+      const flag = MeshBuilder.CreatePlane(`noflag_${clan}`, { size: 0.01 }, this.scene);
+      flag.isVisible = false;
+      const sp = this.ffaSpawns[i];
+      return { clan, center: sp.clone(), spawns: [sp.clone()], facing: Math.atan2(-sp.x, -sp.z), flagPoint: new Vector3(999, 0, 999), flag };
+    };
+    this.bases = { dragons: dummy("dragons", 0), snakes: dummy("snakes", 1) };
+    for (const sp of this.ffaSpawns) this.obstacles.push({ x0: sp.x - 4, z0: sp.z - 4, x1: sp.x + 4, z1: sp.z + 4 });
+    // Две избушки в центре — укрытие
+    this.buildHouse(0, -7, 0, Math.PI / 2);
+    this.buildHouse(1, 9, 3, -Math.PI / 2);
+    // Сугробы: снежные бугры, в которых вязнешь
+    const driftMat = photoMat(this.scene, "snow_field_aerial", "#ffffff");
+    for (let i = 0; i < 9; i++) {
+      const p = this.findFree(-44, -44, 44, 44, 4);
+      if (!p) continue;
+      const r = 3 + this.rng() * 2.5;
+      const m = MeshBuilder.CreateSphere(`drift${i}`, { diameterX: r * 2, diameterY: 1.4, diameterZ: r * 2, segments: 12 }, this.scene);
+      m.position.set(p.x, -0.15, p.z);
+      projectUV(m, 3);
+      m.material = driftMat;
+      m.receiveShadows = true;
+      this.register(m, null, false);
+      this.drifts.push({ x: p.x, z: p.z, r });
+      this.obstacles.push({ x0: p.x - r, z0: p.z - r, x1: p.x + r, z1: p.z + r });
+    }
+    // Заснеженный лес и камни
+    for (let i = 0; i < 70; i++) {
+      const p = this.findFree(-46, -46, 46, 46, 2.2);
+      if (p) this.placeTree(p.x, p.z);
+    }
+    for (let i = 0; i < 25; i++) {
+      const p = this.findFree(-46, -46, 46, 46, 1.2);
+      if (p) this.placeBush(p.x, p.z);
+    }
+    for (let i = 0; i < 10; i++) {
+      const p = this.findFree(-46, -46, 46, 46, 2.5);
+      if (p) this.placeStone(p.x, p.z);
+    }
+    for (let i = 0; i < 10; i++) {
+      const p = this.findFree(-44, -44, 44, 44, 1);
+      if (p) {
+        this.ammoSpots.push(new Vector3(p.x, 0, p.z));
+        this.obstacles.push({ x0: p.x - 1, z0: p.z - 1, x1: p.x + 1, z1: p.z + 1 });
+      }
+    }
+    // Сугробы остаются проходимыми (иначе в них не провалиться) — убираем их из препятствий для ходьбы
+    this.solidRects = null;
+  }
+
+  /** Насколько глубоко точка в сугробе: 0 — снаружи, 1 — в центре */
+  driftDepth(x: number, z: number): number {
+    let best = 0;
+    for (const d of this.drifts) {
+      const k = 1 - Math.hypot(x - d.x, z - d.z) / d.r;
+      if (k > best) best = k;
+    }
+    return best;
   }
 
   // ---------- Уровень 3: соло на заводе ----------

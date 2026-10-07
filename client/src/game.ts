@@ -1,4 +1,6 @@
 import {
+  DynamicTexture,
+  ParticleSystem,
   PhotoDome,
   StandardMaterial,
   Color3,
@@ -144,6 +146,45 @@ export class Game {
   private birds!: Birds;
   /** Дроны леса (уровень 2) */
   readonly drones: Drone[] = [];
+  /** Уровень 4: каждый сам за себя — враги все, кроме тебя самого */
+  get ffa(): boolean {
+    return this.world.level === 4;
+  }
+
+  /** Бот — враг игрока? (в «каждый сам за себя» — все) */
+  private foeOfPlayer(b: Bot): boolean {
+    return this.ffa || b.clan !== this.player.clan;
+  }
+
+  /** Насколько игрок провалился в сугроб: 0..1, на 1 — замёрз */
+  private sink = 0;
+
+  /** Сугробы: вязнешь, проваливаешься, за 5 секунд в глубине — замёрз (−1 жизнь) */
+  private updateSnow(dt: number): void {
+    if (!this.ffa) return;
+    const p = this.player;
+    if (!p.alive || this.state !== "playing") {
+      this.sink = 0;
+      return;
+    }
+    const depth = this.world.driftDepth(p.position.x, p.position.z);
+    p.speedMul = depth > 0.15 ? 0.45 : 1;
+    if (depth > 0.15) {
+      this.sink = Math.min(1, this.sink + (dt / 5) * (0.5 + depth));
+      if (this.sink > 0.25 && Math.random() < dt) this.hud.message("Проваливаешься в снег! Выбирайся!", 1, "#9fe8ff");
+    } else {
+      this.sink = Math.max(0, this.sink - dt / 2);
+    }
+    // Тело уходит в снег — видно со стороны и по высоте камеры
+    p.humanoid.body.position.y = -1.1 * this.sink;
+    if (this.sink >= 1) {
+      this.sink = 0;
+      this.hud.message("Замёрз в сугробе! −1 жизнь", 2, "#9fe8ff");
+      p.invulnerableUntil = 0;
+      this.damagePlayer(9999);
+    }
+  }
+
   /** Ресурсы для торговца: дерево (рубить мечом) и кожа (со зверей) */
   res = { wood: 0, leather: 0 };
   /** Торговец: приходит к бункеру раз в минуту на 30 с */
@@ -266,12 +307,19 @@ export class Game {
 
     // Команды 5 на 5: сначала враги (botCount), потом союзники — на одного меньше, ведь игрок тоже в команде
     const enemy = enemyClan(opts.clan);
-    const enemies = (opts.level ?? 1) === 3 ? Math.min(4, opts.botCount) : opts.botCount;
-    for (let i = 0; i < enemies; i++) {
-      this.bots.push(new Bot(scene, enemy, BOT_WEAPONS[i % BOT_WEAPONS.length]));
+    const lvl = opts.level ?? 1;
+    if (lvl === 4) {
+      // Снег: трое соперников, у каждого своё — клановое оружие или рогатка
+      const ffaWeapons: WeaponId[] = ["clanWeapon", "slingshot", "clanWeapon"];
+      for (let i = 0; i < 3; i++) this.bots.push(new Bot(scene, i % 2 ? opts.clan : enemy, ffaWeapons[i]));
+    } else {
+      const enemies = lvl === 3 ? Math.min(4, opts.botCount) : opts.botCount;
+      for (let i = 0; i < enemies; i++) {
+        this.bots.push(new Bot(scene, enemy, BOT_WEAPONS[i % BOT_WEAPONS.length]));
+      }
     }
     // Уровень 3 — соло: союзников нет
-    const allies = (opts.level ?? 1) === 3 ? 0 : opts.botCount - 1;
+    const allies = (opts.level ?? 1) >= 3 ? 0 : opts.botCount - 1;
     for (let i = 0; i < allies; i++) {
       this.bots.push(new Bot(scene, opts.clan, BOT_WEAPONS[(i + 1) % BOT_WEAPONS.length], true));
     }
@@ -298,7 +346,8 @@ export class Game {
     this.buildChests();
     this.buildMedkits();
     this.spawnAnimals();
-    this.birds = new Birds(this.scene, opts.detail < 1 ? 6 : 12);
+    this.birds = new Birds(this.scene, this.world.level === 4 ? 0 : opts.detail < 1 ? 6 : 12);
+    if (this.world.level === 4) this.makeSnowfall(opts.detail);
     if (this.world.level === 2) {
       const ground = (x: number, z: number) => this.world.heightAt(x, z);
       for (let i = 0; i < (opts.detail < 0.3 ? 2 : 3); i++) this.drones.push(new Drone(this.scene, { x0: 15, z0: 15, x1: 95, z1: 95 }, ground));
@@ -492,6 +541,45 @@ export class Game {
     }
   }
 
+  /** Снегопад вокруг камеры и белёсая дымка */
+  private makeSnowfall(detail: number): void {
+    const scene = this.scene;
+    scene.fogColor = new Color3(0.86, 0.9, 0.95);
+    scene.fogStart = 18;
+    scene.fogEnd = 85;
+    const tex = new DynamicTexture("flake", { width: 32, height: 32 }, scene, false);
+    const ctx = tex.getContext() as CanvasRenderingContext2D;
+    const grd = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+    grd.addColorStop(0, "rgba(255,255,255,1)");
+    grd.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, 32, 32);
+    tex.hasAlpha = true;
+    tex.update();
+    const ps = new ParticleSystem("snow", detail < 1 ? 600 : 1800, scene);
+    ps.particleTexture = tex;
+    const emitter = new TransformNode("snowEmitter", scene);
+    ps.emitter = emitter as unknown as Vector3;
+    ps.minEmitBox = new Vector3(-25, 12, -25);
+    ps.maxEmitBox = new Vector3(25, 14, 25);
+    ps.direction1 = new Vector3(-0.6, -1, -0.3);
+    ps.direction2 = new Vector3(0.6, -1, 0.3);
+    ps.minSize = 0.05;
+    ps.maxSize = 0.14;
+    ps.minLifeTime = 4;
+    ps.maxLifeTime = 7;
+    ps.emitRate = detail < 1 ? 120 : 320;
+    ps.minEmitPower = 1.5;
+    ps.maxEmitPower = 2.5;
+    ps.gravity = new Vector3(0, -0.5, 0);
+    ps.color1 = new Color4(1, 1, 1, 0.9);
+    ps.color2 = new Color4(0.9, 0.95, 1, 0.7);
+    ps.colorDead = new Color4(1, 1, 1, 0);
+    ps.start();
+    // Облако снежинок едет за камерой
+    scene.onBeforeRenderObservable.add(() => emitter.position.copyFrom(this.camera.position));
+  }
+
   // ---------------- Дроны ----------------
 
   private updateDrones(dt: number): void {
@@ -584,6 +672,7 @@ export class Game {
   private updateTrader(dt: number): void {
     void dt;
     if (this.state !== "playing" && this.state !== "dead") return;
+    if (this.ffa) return;
     if (this.now >= this.nextTraderAt) {
       this.nextTraderAt = this.now + 60;
       this.traderUntil = this.now + 30;
@@ -839,7 +928,7 @@ export class Game {
         this.sfx.clang();
         this.carSpeed *= 0.6;
       };
-      for (const b of this.bots) if (b.alive && b.clan !== p.clan) ram(b.position, b, (d) => this.damageBot(b, d));
+      for (const b of this.bots) if (b.alive && this.foeOfPlayer(b)) ram(b.position, b, (d) => this.damageBot(b, d));
       for (const a of this.animals) if (a.alive) ram(a.pos, a, (d) => a.takeDamage(d, this.playerPrey, this.now));
     }
   }
@@ -883,7 +972,7 @@ export class Game {
       if (d > 0.3 && Vector3.Dot(to.scale(1 / d), f) < 0.64) return;
       if (!best || d < best.d) best = { d, ...item };
     };
-    for (const b of this.bots) if (b.alive && b.clan !== p.clan) consider(b.position, 0, { bot: b });
+    for (const b of this.bots) if (b.alive && this.foeOfPlayer(b)) consider(b.position, 0, { bot: b });
     for (const a of this.animals) if (a.alive) consider(a.pos, a.info.radius, { beast: a });
     const hit = best as { d: number; bot?: Bot; beast?: Animal } | null;
     if (!hit) {
@@ -1272,12 +1361,14 @@ export class Game {
     this.player.lives = RULES.lives;
     // Оружие — только выбранное перед матчем (рогатку можно ещё найти в сундуке)
     this.player.owned.clear();
-    for (const w of this.loadout.weapons) this.player.owned.add(w);
+    // Снег: только клановое оружие и рогатка, без бомб
+    const kit = this.ffa ? (["clanWeapon", "slingshot"] as WeaponId[]) : this.loadout.weapons;
+    for (const w of kit) this.player.owned.add(w);
     this.player.swordLevel = 1;
     this.player.humanoid.setSwordLevel(1);
     this.setVmSwordLevel(1);
     this.chargeFrom = -1;
-    const lb = this.loadout.bombs;
+    const lb = this.ffa ? [] : this.loadout.bombs;
     this.bombs = { weak: lb.includes("weak") ? 1 : 0, strong: 0, boom: lb.includes("boom") ? 1 : 0, frost: lb.includes("frost") ? 1 : 0 };
     this.playerFrozenUntil = -1;
     this.res = { wood: 0, leather: 0 };
@@ -1308,9 +1399,15 @@ export class Game {
     this.respawnPlayer();
     this.bots.forEach((b, i) => {
       if (b.guardHome) return;
+      b.lives = RULES.lives;
+      if (this.ffa) {
+        const sp = this.world.ffaSpawns[(i + 1) % this.world.ffaSpawns.length];
+        b.spawn(sp, Math.atan2(-sp.x, -sp.z));
+        b.bombs = { boom: 0, frost: 0 };
+        return;
+      }
       const base = this.world.bases[b.clan];
       const sp = base.spawns[i % base.spawns.length];
-      b.lives = RULES.lives;
       b.spawn(sp, base.facing);
     });
     for (const m of this.medkits) {
@@ -1335,6 +1432,15 @@ export class Game {
   }
 
   private respawnPlayer(): void {
+    if (this.ffa) {
+      const sp = this.world.ffaSpawns[0];
+      this.player.spawnAt(sp, Math.atan2(-sp.x, -sp.z), this.now);
+      this.state = "playing";
+      this.setFirstPerson(this.firstPerson);
+      this.playerFrozenUntil = -1;
+      this.sink = 0;
+      return;
+    }
     // Лёд не переживает смерть
     this.playerFrozenUntil = -1;
     this.ice = this.ice.filter((c) => {
@@ -1397,12 +1503,13 @@ export class Game {
     const p = this.player;
 
     if (input.cameraToggle && !this.scoped) this.setFirstPerson(!this.firstPerson);
-    if (input.scopeToggle && this.state === "playing") this.setScoped(!this.scoped);
+    if (input.scopeToggle && this.ffa) this.hud.message("В снегах трубы нет", 1, "#9fe8ff");
+    else if (input.scopeToggle && this.state === "playing") this.setScoped(!this.scoped);
     if (this.state !== "playing" && this.scoped) this.setScoped(false);
     const sword = p.weapon === "sword";
     // С мечом правая кнопка — щит, а не прицел
     this.blocking = sword && input.aim && !this.scoped && this.state === "playing";
-    this.aiming = !sword && input.aim && !this.scoped && this.state === "playing";
+    this.aiming = !sword && !this.ffa && input.aim && !this.scoped && this.state === "playing";
     p.humanoid.blocking = this.blocking;
     // В приближении поворот медленнее — пропорционально углу обзора, чтобы целиться точно
     const zoomK = this.camera.fov / BASE_FOV;
@@ -1462,6 +1569,7 @@ export class Game {
     this.updateSpikes();
     this.updateHides();
     this.updateDome(dt);
+    this.updateSnow(dt);
     this.updateThrown(dt);
     if (this.state === "playing" || this.state === "dead") this.updateMatch(dt);
 
@@ -1480,6 +1588,7 @@ export class Game {
       status: this.blocking ? "Щит" : this.aiming ? "Прицел" : p.crouching ? "Присел" : p.sprinting ? "Бег" : "",
       hidden,
       teams: this.teamCounts(),
+      ffaAlive: this.ffa ? this.bots.filter((b) => b.alive || b.lives > 0).length + (p.lives > 0 ? 1 : 0) : 0,
       owned: [...p.owned],
       swordLevel: p.swordLevel,
       res: this.res,
@@ -1631,7 +1740,7 @@ export class Game {
     let maxT = wHit?.hit ? wHit.distance : w.range;
     let target: Bot | null = null;
     for (const b of this.bots) {
-      if (!b.alive || b.clan === p.clan) continue;
+      if (!b.alive || !this.foeOfPlayer(b)) continue;
       const bp = b.position;
       const r = rayVsVerticalSegment(origin, dir, maxT, bp.x, bp.y + 0.2, bp.y + 1.62, bp.z);
       if (r.dist < 0.36 && r.t < maxT) {
@@ -1713,7 +1822,7 @@ export class Game {
 
     // Вражеские боты рядом слышат выстрел
     for (const b of this.bots) {
-      if (b.alive && b.clan !== p.clan && Vector3.DistanceSquared(b.position, p.position) < 30 * 30) b.hear(p.position.clone());
+      if (b.alive && this.foeOfPlayer(b) && Vector3.DistanceSquared(b.position, p.position) < 30 * 30) b.hear(p.position.clone());
     }
   }
 
@@ -1767,8 +1876,15 @@ export class Game {
       }
       return;
     }
+    // «Каждый сам за себя»: остался последним — победа
+    if (this.ffa) {
+      if (this.bots.every((b) => !b.alive && b.lives <= 0)) {
+        this.endMatch(this.player.clan, "Ты последний выживший в снегах!");
+        return;
+      }
+    }
     // Выбывание целого клана
-    for (const c of ["dragons", "snakes"] as const) {
+    for (const c of this.ffa ? [] : (["dragons", "snakes"] as const)) {
       if (this.clanOut(c)) {
         this.endMatch(enemyClan(c), `Все ${CLANS[c].name} выбыли`);
         return;
@@ -1817,7 +1933,7 @@ export class Game {
       now: this.now,
       findTarget: (b) => this.findTarget(b),
       enemyHint: (b) => {
-        const list = this.enemiesOf(b.clan).filter((t) => t.alive);
+        const list = this.foesOf(b).filter((t) => t.alive);
         return list.length ? list[Math.floor(Math.random() * list.length)].pos : null;
       },
       randomWalkPoint: (near, radius) => this.world.randomWalkPoint(Math.random, near, radius),
@@ -1838,6 +1954,11 @@ export class Game {
         return b.attacker ? this.world.bases[enemyClan(b.clan)].flagPoint : null;
       },
       basePoint: (clan) => {
+        if (this.ffa) {
+          // Возрождение в самом дальнем от игрока углу
+          const sp = [...this.world.ffaSpawns].sort((a, b) => Vector3.DistanceSquared(b, this.player.position) - Vector3.DistanceSquared(a, this.player.position))[0];
+          return { pos: sp, yaw: Math.atan2(-sp.x, -sp.z) };
+        }
         const base = this.world.bases[clan];
         return { pos: base.spawns[Math.floor(Math.random() * base.spawns.length)], yaw: base.facing };
       },
@@ -1861,6 +1982,15 @@ export class Game {
   }
 
   /** Все возможные цели для клана: игрок (если он из другого клана) и чужие боты */
+  /** Враги бота: в «каждый сам за себя» — все остальные, иначе — чужой клан */
+  private foesOf(b: Bot): Target[] {
+    if (!this.ffa) return this.enemiesOf(b.clan);
+    const out: Target[] = [];
+    if (this.state === "playing") out.push(this.playerTarget);
+    for (const o of this.bots) if (o !== b) out.push(this.targetOf(o));
+    return out;
+  }
+
   private enemiesOf(clan: ClanId): Target[] {
     const out: Target[] = [];
     if (this.opts.clan !== clan && this.state === "playing") out.push(this.playerTarget);
@@ -1875,7 +2005,7 @@ export class Game {
     for (const a of this.animals) {
       if (a.alive && a.target === mine && Vector3.DistanceSquared(a.pos, b.position) < 25 * 25) return this.animalTarget(a);
     }
-    const cands = this.enemiesOf(b.clan)
+    const cands = this.foesOf(b)
       .filter((t) => t.alive)
       .map((t) => ({ t, d: Vector3.DistanceSquared(t.pos, b.position) }))
       .filter((c) => c.d < 55 * 55)
@@ -1946,7 +2076,7 @@ export class Game {
         beast.takeDamage(WEAPONS[b.weapon].damage, this.preyOf(b), this.now);
         this.effects.impact(end, true);
       } else if (hit && t.alive) {
-        const dmg = computeDamage(b.weapon, b.clan, t.clan!);
+        const dmg = this.ffa ? WEAPONS[b.weapon].damage : computeDamage(b.weapon, b.clan, t.clan!);
         if (isPlayer) {
           if (this.state === "playing") this.damagePlayer(dmg);
         } else if (victim!.takeDamage(dmg, b.position.clone(), this.now)) {
@@ -1959,6 +2089,8 @@ export class Game {
     };
     if (b.weapon === "clanWeapon") {
       this.effects.orb(origin, end, CLANS[b.clan].effect, 32, apply);
+    } else if (b.weapon === "slingshot") {
+      this.effects.orb(origin, end, "stone", 34, apply);
     } else {
       this.effects.tracer(origin, end, true);
       apply();
@@ -1984,7 +2116,8 @@ export class Game {
       if (p.lives <= 0) {
         p.humanoid.deathT = 1;
         p.humanoid.animate(0, 0, false, 0, false);
-        if (this.clanOut(p.clan)) this.endMatch(enemyClan(p.clan), `Все ${CLANS[p.clan].name} выбыли`);
+        if (this.ffa) this.endMatch(enemyClan(p.clan), "Ты замёрз и выбыл. В снегах остались другие");
+        else if (this.clanOut(p.clan)) this.endMatch(enemyClan(p.clan), `Все ${CLANS[p.clan].name} выбыли`);
         else this.endMatch(null, "Ты потратил все три жизни");
       } else {
         this.onDeath(p.lives);

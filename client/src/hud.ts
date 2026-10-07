@@ -72,7 +72,7 @@ export class Hud {
     apply();
   }
 
-  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; res: { wood: number; leather: number }; bombs: { weak: number; strong: number; boom: number; frost: number }; domeLeft: number; teams: Record<ClanId, number>; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; res: { wood: number; leather: number }; bombs: { weak: number; strong: number; boom: number; frost: number }; domeLeft: number; teams: Record<ClanId, number>; ffaAlive?: number; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
     const hp = Math.ceil(s.hp);
     this.set("hp", hp, () => {
       this.hpNum.textContent = String(hp);
@@ -112,7 +112,18 @@ export class Hud {
     this.set("fps", s.fps, () => {
       this.fps.textContent = `${s.fps} FPS`;
     });
-    this.set("teams", `${s.teams.dragons}:${s.teams.snakes}`, () => {
+    this.set("teams", `${s.teams.dragons}:${s.teams.snakes}:${s.ffaAlive ?? 0}`, () => {
+      const el = document.getElementById("teams")!;
+      if (s.ffaAlive) {
+        // «Каждый сам за себя» — один общий счётчик
+        el.innerHTML = `Осталось бойцов: <b>${s.ffaAlive}</b>`;
+        return;
+      }
+      if (!el.querySelector(".t-dragons")) {
+        el.innerHTML = '<span class="t-dragons">Драконы <b></b></span><i>:</i><span class="t-snakes"><b></b> Змеи</span>';
+        this.teamDragons = el.querySelector<HTMLElement>(".t-dragons b")!;
+        this.teamSnakes = el.querySelector<HTMLElement>(".t-snakes b")!;
+      }
       this.teamDragons.textContent = String(s.teams.dragons);
       this.teamSnakes.textContent = String(s.teams.snakes);
     });
