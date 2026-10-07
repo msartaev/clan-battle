@@ -91,7 +91,7 @@ export const RULES = {
   frostSec: 10,
 } as const;
 
-export type WeaponId = "weakPistol" | "strongPistol" | "clanWeapon" | "slingshot" | "sword";
+export type WeaponId = "weakPistol" | "strongPistol" | "clanWeapon" | "slingshot" | "sword" | "sticky";
 
 export interface WeaponDef {
   id: WeaponId;
@@ -148,6 +148,16 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     spread: 0,
     ammoPerShot: 0,
   },
+  // Пистолет-липучка: почти без урона, зато цель прилипает на 30 с. Дорогой выстрел — 3 патрона
+  sticky: {
+    id: "sticky",
+    name: "Пистолет-липучка",
+    damage: 2,
+    fireRate: 0.8,
+    range: 40,
+    spread: 0.006,
+    ammoPerShot: 3,
+  },
   // Рогатка (GDD): урон 10, стреляет медленнее пистолетов, разбивает стёкла; находят в сундуках
   slingshot: {
     id: "slingshot",
@@ -160,7 +170,10 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
   },
 };
 
-export const WEAPON_ORDER: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon", "slingshot", "sword"];
+export const WEAPON_ORDER: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon", "slingshot", "sword", "sticky"];
+
+/** Пистолет-липучка (идея Даниэля): попал — цель прилипла и не может сойти с места */
+export const STICKY = { stuckSec: 30 } as const;
 
 /** Мечи кланов (GDD «Мечи кланов»): уровни 1–4, в прототипе доступны 1 и 2 */
 export const SWORDS: Record<ClanId, { name: string; damage: number; length: number }[]> = {

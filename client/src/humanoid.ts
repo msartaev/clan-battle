@@ -142,7 +142,7 @@ export class Humanoid {
     this.afterAnim = scene.onAfterAnimationsObservable.add(() => this.afterAnimations());
 
     // Бластеры в правой кисти; ориентацию подбираем по первому кадру позы прицела
-    const weapons: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon", "slingshot", "sword"];
+    const weapons: WeaponId[] = ["weakPistol", "strongPistol", "clanWeapon", "slingshot", "sword", "sticky"];
     for (const w of weapons) {
       const holder = new TransformNode(`${name}_gun_${w}`, scene);
       // Оружие висит на корне персонажа (без зеркального масштаба glTF) и каждый кадр встаёт в кисть

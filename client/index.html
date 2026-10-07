@@ -48,6 +48,22 @@
             <span class="desc">яд змеи</span>
           </button>
         </div>
+        <div id="loadout">
+          <p class="sub">Снаряжение: до 4 видов оружия и 2 вида бомб</p>
+          <div class="lo-row" data-kind="weapon">
+            <button data-id="weakPistol">Слабый пистолет</button>
+            <button data-id="strongPistol">Сильный пистолет</button>
+            <button data-id="clanWeapon">Клановое</button>
+            <button data-id="slingshot">Рогатка</button>
+            <button data-id="sword">Меч</button>
+            <button data-id="sticky">Липучка</button>
+          </div>
+          <div class="lo-row" data-kind="bomb">
+            <button data-id="weak">🟢 Купол</button>
+            <button data-id="boom">💥 Взрывная</button>
+            <button data-id="frost">🧊 Ледяная</button>
+          </div>
+        </div>
         <div id="quality">
           <span>Графика:</span>
           <button data-q="auto">Авто</button>
@@ -102,6 +118,7 @@
         <div class="slot" data-slot="2"><span>3</span>Клановое</div>
         <div class="slot" data-slot="3"><span>4</span>Рогатка</div>
         <div class="slot" data-slot="4"><span>5</span>Меч</div>
+        <div class="slot" data-slot="5"><span>6</span>Липучка</div>
       </div>
 
       <div id="toast"></div>

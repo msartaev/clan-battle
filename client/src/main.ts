@@ -1,5 +1,5 @@
 import "./style.css";
-import type { ClanId } from "@clan-battle/shared";
+import type { ClanId, WeaponId } from "@clan-battle/shared";
 import { CLANS } from "@clan-battle/shared";
 import { Game } from "./game";
 import { Input } from "./input";
@@ -46,6 +46,51 @@ function selectClan(c: ClanId): void {
 }
 clanButtons.forEach((b) => b.addEventListener("click", () => selectClan(b.dataset.clan as ClanId)));
 selectClan(clan);
+
+// ----- Снаряжение: до 4 видов оружия и 2 видов бомб, выбор запоминается -----
+type BombKind = "weak" | "boom" | "frost";
+const LIMIT = { weapon: 4, bomb: 2 } as const;
+let loadout: { weapon: string[]; bomb: string[] } = {
+  weapon: ["weakPistol", "strongPistol", "clanWeapon", "sword"],
+  bomb: ["weak", "boom"],
+};
+try {
+  const saved = JSON.parse(localStorage.getItem("cb_loadout") ?? "null");
+  if (saved?.weapon?.length && Array.isArray(saved.bomb)) loadout = saved;
+} catch {
+  /* нет сохранения — значения по умолчанию */
+}
+function renderLoadout(): void {
+  for (const row of Array.from(document.querySelectorAll<HTMLElement>("#loadout .lo-row"))) {
+    const kind = row.dataset.kind as "weapon" | "bomb";
+    row.querySelectorAll<HTMLButtonElement>("button").forEach((b) => b.classList.toggle("selected", loadout[kind].includes(b.dataset.id!)));
+  }
+}
+document.querySelectorAll<HTMLElement>("#loadout .lo-row").forEach((row) => {
+  const kind = row.dataset.kind as "weapon" | "bomb";
+  row.querySelectorAll<HTMLButtonElement>("button").forEach((b) =>
+    b.addEventListener("click", () => {
+      const id = b.dataset.id!;
+      const list = loadout[kind];
+      if (list.includes(id)) {
+        // Хотя бы одно оружие должно остаться
+        if (kind === "weapon" && list.length <= 1) return;
+        loadout[kind] = list.filter((x) => x !== id);
+      } else {
+        if (list.length >= LIMIT[kind]) list.shift();
+        list.push(id);
+      }
+      try {
+        localStorage.setItem("cb_loadout", JSON.stringify(loadout));
+      } catch {
+        /* не сохранилось */
+      }
+      renderLoadout();
+      game?.setLoadout(loadout.weapon as WeaponId[], loadout.bomb as BombKind[]);
+    }),
+  );
+});
+renderLoadout();
 
 // ----- Качество графики -----
 const qualityButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("#quality button"));
@@ -111,6 +156,8 @@ function startGame(): void {
       if (!game) {
         const q = resolvedQuality();
         game = await Game.create(canvas, input, { clan, touch, lowFx: q !== "high", detail: QUALITY_DETAIL[q], testMode, botCount });
+        game.setLoadout(loadout.weapon as WeaponId[], loadout.bomb as BombKind[]);
+        game.resetMatch();
         game.onDeath = (lives) => {
           $("dead-text").textContent =
             lives === 1 ? "Осталась последняя жизнь. Возрождение на базе…" : `Осталось жизней: ${lives}. Возрождение на базе…`;

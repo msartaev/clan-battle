@@ -21,6 +21,8 @@ import {
   CLANS,
   MELEE,
   RULES,
+  STICKY,
+  WEAPON_ORDER,
   SWORDS,
   WEAPONS,
   computeDamage,
@@ -155,6 +157,16 @@ export class Game {
   private chargeFrom = -1;
   /** Держим меч ровно, как щит */
   blocking = false;
+  /** Снаряжение, выбранное перед матчем */
+  private loadout: { weapons: WeaponId[]; bombs: ("weak" | "boom" | "frost")[] } = {
+    weapons: ["weakPistol", "strongPistol", "clanWeapon", "sword", "sticky"],
+    bombs: ["weak", "boom", "frost"],
+  };
+
+  setLoadout(weapons: WeaponId[], bombs: ("weak" | "boom" | "frost")[]): void {
+    this.loadout = { weapons: [...weapons], bombs: [...bombs] };
+  }
+
   /** Лечебные бомбы в запасе */
   bombs = { weak: 1, strong: 0, boom: 1, frost: 1 };
   /** Летящие боевые бомбы */
@@ -162,7 +174,7 @@ export class Game {
   /** Игрока заморозили вражеской бомбой */
   private playerFrozenUntil = -1;
   /** Ледяные глыбы вокруг замороженных */
-  private ice: { mesh: Mesh; until: number; follow: Vector3 }[] = [];
+  private ice: { mesh: Mesh; until: number; follow: Vector3; y?: number }[] = [];
   /** Активный купол бессмертия (один на игрока) */
   dome: { mesh: Mesh; center: Vector3; until: number; total: number } | null = null;
   private playerPrey!: Prey;
@@ -360,6 +372,7 @@ export class Game {
     vmGun("clanWeapon", 0.42);
     vmGun("slingshot", 1);
     vmGun("sword", 1);
+    vmGun("sticky", 0.34);
     const muzzle = new TransformNode("vmMuzzle", this.scene);
     muzzle.parent = vm;
     muzzle.position.set(0, 0.04, 0.3);
@@ -464,10 +477,54 @@ export class Game {
 
   // ---------------- Торговец, охранники, шипы ----------------
 
+  /** Зверь повержен игроком — шкура падает на землю, её надо подобрать */
   private gainLeather(a: Animal): void {
+    this.hud.message(`${a.info.name} повержен — подбери шкуру!`, 1.6, "#ffe1a8");
+  }
+
+  private hides: { mesh: Mesh; pos: Vector3; n: number; until: number }[] = [];
+  private hideDropped = new Set<Animal>();
+
+  /** Шкура: бурый мех на земле, приподнимается и поблёскивает, чтобы её было видно */
+  private dropHide(a: Animal): void {
     const n = a.kind === "bear" ? 3 : a.kind === "moose" ? 2 : 1;
-    this.res.leather += n;
-    this.hud.message(`${a.info.name} повержен: +${n} 🟫 кожи`, 1.6, "#ffe1a8");
+    const size = a.kind === "bear" ? 1.4 : a.kind === "moose" ? 1.2 : 0.9;
+    const m = MeshBuilder.CreateDisc("hide", { radius: size / 2, tessellation: 9 }, this.scene);
+    m.rotation.x = Math.PI / 2;
+    m.scaling.set(1.3, 0.8, 1);
+    const color = a.kind === "wolf" ? "#6b6258" : a.kind === "bear" ? "#4a3121" : "#5e4630";
+    const mat = flatMat(this.scene, color, 0.15);
+    mat.backFaceCulling = false;
+    m.material = mat;
+    m.isPickable = false;
+    const pos = a.pos.clone();
+    m.position.set(pos.x, 0.06, pos.z);
+    this.hides.push({ mesh: m, pos, n, until: this.now + 90 });
+  }
+
+  private updateHides(): void {
+    for (const a of this.animals) {
+      if (!a.alive && !this.hideDropped.has(a)) {
+        this.hideDropped.add(a);
+        this.dropHide(a);
+      } else if (a.alive) this.hideDropped.delete(a);
+    }
+    const p = this.player;
+    for (let i = this.hides.length - 1; i >= 0; i--) {
+      const h = this.hides[i];
+      h.mesh.position.y = 0.06 + Math.abs(Math.sin(this.now * 2.5)) * 0.08;
+      h.mesh.rotation.z += 0.01;
+      const near = p.alive && (p.position.x - h.pos.x) ** 2 + (p.position.z - h.pos.z) ** 2 < 1.6 * 1.6;
+      if (near) {
+        this.res.leather += h.n;
+        this.sfx.pickup();
+        this.hud.message(`Шкура! +${h.n} 🟫 кожи (${this.res.leather})`, 1.6, "#ffe1a8");
+      }
+      if (near || this.now > h.until) {
+        h.mesh.dispose();
+        this.hides.splice(i, 1);
+      }
+    }
   }
 
   /** Где стоит торговец: перед бункером своего клана */
@@ -889,6 +946,21 @@ export class Game {
     }
   }
 
+  // ---------------- Липучка ----------------
+
+  /** Прилепить цель: розовая лужа слизи у ног на всё время */
+  private stick(pos: Vector3, apply: () => void, r: number, who: string): void {
+    apply();
+    const m = MeshBuilder.CreateCylinder("goo", { height: 0.12, diameter: r * 2.4, tessellation: 14 }, this.scene);
+    const mat = flatMat(this.scene, "#ff5ad8", 0.35);
+    mat.alpha = 0.8;
+    m.material = mat;
+    m.isPickable = false;
+    this.ice.push({ mesh: m, until: this.now + STICKY.stuckSec, follow: pos, y: 0.05 });
+    this.sfx.shot("sticky");
+    this.hud.message(`${who} прилип на ${STICKY.stuckSec} с!`, 1.4, "#ff9be8");
+  }
+
   // ---------------- Боевые бомбы ----------------
 
   private throwCombat(kind: "boom" | "frost" | "combat"): void {
@@ -937,7 +1009,7 @@ export class Game {
     }
     for (let i = this.ice.length - 1; i >= 0; i--) {
       const c = this.ice[i];
-      c.mesh.position.set(c.follow.x, c.follow.y + 0.95, c.follow.z);
+      c.mesh.position.set(c.follow.x, c.follow.y + (c.y ?? 0.95), c.follow.z);
       if (this.now >= c.until) {
         c.mesh.dispose();
         this.ice.splice(i, 1);
@@ -1147,14 +1219,19 @@ export class Game {
     this.state = "playing";
     this.deadTimer = 0;
     this.player.lives = RULES.lives;
-    this.player.owned.delete("slingshot");
+    // Оружие — только выбранное перед матчем (рогатку можно ещё найти в сундуке)
+    this.player.owned.clear();
+    for (const w of this.loadout.weapons) this.player.owned.add(w);
     this.player.swordLevel = 1;
     this.player.humanoid.setSwordLevel(1);
     this.setVmSwordLevel(1);
     this.chargeFrom = -1;
-    this.bombs = { weak: 1, strong: 0, boom: 1, frost: 1 };
+    const lb = this.loadout.bombs;
+    this.bombs = { weak: lb.includes("weak") ? 1 : 0, strong: 0, boom: lb.includes("boom") ? 1 : 0, frost: lb.includes("frost") ? 1 : 0 };
     this.playerFrozenUntil = -1;
     this.res = { wood: 0, leather: 0 };
+    for (const h of this.hides) h.mesh.dispose();
+    this.hides = [];
     this.nextTraderAt = 60;
     this.traderUntil = -1;
     this.trader?.setEnabled(false);
@@ -1174,7 +1251,9 @@ export class Game {
     for (const c of this.ice) c.mesh.dispose();
     this.ice = [];
     this.removeDome();
-    this.player.selectWeapon(0);
+    // Первое из выбранного оружия
+    const first = WEAPON_ORDER.findIndex((w) => this.player.owned.has(w));
+    this.player.selectWeapon(Math.max(0, first));
     this.respawnPlayer();
     this.bots.forEach((b, i) => {
       if (b.guardHome) return;
@@ -1329,6 +1408,7 @@ export class Game {
     this.birds.update(dt, this.now);
     this.updateTrader(dt);
     this.updateSpikes();
+    this.updateHides();
     this.updateDome(dt);
     this.updateThrown(dt);
     if (this.state === "playing" || this.state === "dead") this.updateMatch(dt);
@@ -1525,6 +1605,15 @@ export class Game {
 
     const apply = () => {
       if (glassHit && !beast && !target) this.shatter(glassHit);
+      if (p.weapon === "sticky") {
+        if (beast && beast.alive) this.stick(beast.pos, () => (beast.stuckUntil = this.now + STICKY.stuckSec), beast.info.radius + 0.3, beast.info.name);
+        else if (target && target.alive) {
+          const tb = target;
+          this.stick(tb.position, () => (tb.stuckUntil = this.now + STICKY.stuckSec), 0.6, "Враг");
+          this.damageBot(tb, WEAPONS.sticky.damage);
+        } else if (wHit?.hit) this.effects.impact(end, false);
+        return;
+      }
       if (beast && beast.alive) {
         const killed = beast.takeDamage(WEAPONS[p.weapon].damage, this.playerPrey, this.now);
         this.hud.hit(killed);
@@ -1543,6 +1632,8 @@ export class Game {
       this.effects.orb(muzzle, end, CLANS[p.clan].effect, 55, apply);
     } else if (p.weapon === "slingshot") {
       this.effects.orb(muzzle, end, "stone", 38, apply);
+    } else if (p.weapon === "sticky") {
+      this.effects.orb(muzzle, end, "goo", 30, apply);
     } else {
       this.effects.muzzleFlash(muzzle);
       this.effects.tracer(muzzle, end);

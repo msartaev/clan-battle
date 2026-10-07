@@ -105,7 +105,7 @@ export class Effects {
   private fire: SparkPool;
   private poison: SparkPool;
   private orbs: Orb[] = [];
-  private orbFree: Record<OrbKind, Mesh[]> = { fire: [], poison: [], stone: [] };
+  private orbFree: Record<OrbKind, Mesh[]> = { fire: [], poison: [], stone: [], goo: [] };
   private orbMats: Record<OrbKind, StandardMaterial>;
   private flash: Mesh;
   private flashLife = 0;
@@ -120,7 +120,7 @@ export class Effects {
     this.poison = new SparkPool(scene, "poison", "#8aff3a", Math.round(140 * n));
     const stoneMat = new StandardMaterial("orbStone", scene);
     stoneMat.diffuseColor = Color3.FromHexString("#8a8580");
-    this.orbMats = { fire: glowMat(scene, "orbFire", "#ffb347"), poison: glowMat(scene, "orbPoison", "#a8ff5a"), stone: stoneMat };
+    this.orbMats = { fire: glowMat(scene, "orbFire", "#ffb347"), poison: glowMat(scene, "orbPoison", "#a8ff5a"), stone: stoneMat, goo: glowMat(scene, "orbGoo", "#ff5ad8") };
     this.flash = MeshBuilder.CreateIcoSphere("muzzleFlash", { radius: 0.09, subdivisions: 1 }, scene);
     this.flash.material = glowMat(scene, "flashMat", "#fff6c0");
     this.flash.isPickable = false;
@@ -199,7 +199,7 @@ export class Effects {
   orb(from: Vector3, to: Vector3, kind: OrbKind, speed: number, onHit: () => void): void {
     let mesh = this.orbFree[kind].pop();
     if (!mesh) {
-      mesh = MeshBuilder.CreateIcoSphere(`orb_${kind}`, { radius: kind === "stone" ? 0.045 : 0.16, subdivisions: 1 }, this.scene);
+      mesh = MeshBuilder.CreateIcoSphere(`orb_${kind}`, { radius: kind === "stone" ? 0.045 : kind === "goo" ? 0.09 : 0.16, subdivisions: 1 }, this.scene);
       mesh.material = this.orbMats[kind];
       mesh.isPickable = false;
     }
@@ -228,7 +228,7 @@ export class Effects {
       o.t += dt;
       const k = Math.min(1, o.t / o.dur);
       Vector3.LerpToRef(o.from, o.to, k, o.mesh.position);
-      if (o.kind === "stone") {
+      if (o.kind === "stone" || o.kind === "goo") {
         // Камешек летит по небольшой дуге
         o.mesh.position.y += Math.sin(k * Math.PI) * Vector3.Distance(o.from, o.to) * 0.03;
       } else {
@@ -242,7 +242,7 @@ export class Effects {
         o.mesh.setEnabled(false);
         this.orbFree[o.kind].push(o.mesh);
         this.orbs.splice(i, 1);
-        if (o.kind !== "stone") this.clanBurst(o.to, o.kind);
+        if (o.kind === "fire" || o.kind === "poison") this.clanBurst(o.to, o.kind);
         o.onHit();
       }
     }
@@ -272,7 +272,7 @@ export class Effects {
   }
 }
 
-export type OrbKind = "fire" | "poison" | "stone";
+export type OrbKind = "fire" | "poison" | "stone" | "goo";
 
 /** Крошечный синтезатор звуков на WebAudio — без файлов */
 export class Sfx {
@@ -339,6 +339,11 @@ export class Sfx {
   shot(weapon: WeaponId, distanceVol = 1): void {
     if (weapon === "sword") {
       this.swing();
+      return;
+    }
+    if (weapon === "sticky") {
+      // Липучка: мокрый «чпок»
+      this.tone(240, 0.12, 0.14 * distanceVol, 0.4);
       return;
     }
     if (weapon === "slingshot") {

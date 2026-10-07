@@ -48,6 +48,7 @@ const NATURE_COLORS: Record<string, string> = {
 const GUN_FILES = {
   weakPistol: "blaster-a",
   strongPistol: "blaster-k",
+  sticky: "blaster-i",
   clan_dragons: "blaster-c",
   clan_snakes: "blaster-o",
 } as const;

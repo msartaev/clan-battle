@@ -53,6 +53,8 @@ export class Bot {
   bombs = { boom: 1, frost: 1 };
   private bombCooldown = 4;
   private meleeCooldown = 0;
+  /** Прилип (липучка) до этого момента: не сходит с места, но стрелять может */
+  stuckUntil = -1;
   /** Заморожен бомбой до этого момента: не ходит и не стреляет */
   frozenUntil = -1;
   /** Штурмовик: в свободное время идёт захватывать вражеский флаг */
@@ -152,6 +154,8 @@ export class Bot {
     this.sees = false;
     this.target = null;
     this.bombs = { boom: 1, frost: 1 };
+    this.stuckUntil = -1;
+    this.frozenUntil = -1;
     this.bombCooldown = 4 + Math.random() * 6;
     this.humanoid.setWeapon(this.weapon);
     this.seeCheckIn = Math.random() * 0.2;
@@ -359,6 +363,7 @@ export class Bot {
       moveSpeed = Math.max(moveSpeed, 2.6);
     }
     move.y = 0;
+    if (ctx.now < this.stuckUntil) moveSpeed = 0;
     const len = move.length();
     const before = pos.clone();
     if (len > 0.05 && moveSpeed > 0) {
@@ -452,6 +457,7 @@ export class Bot {
       face = this.goal;
     }
     move.y = 0;
+    if (ctx.now < this.stuckUntil) speed = 0;
     const len = move.length();
     const before = pos.clone();
     if (len > 0.05 && speed > 0) {

@@ -113,6 +113,8 @@ export class Animal {
   private home: Vector3;
   /** Заморожен бомбой до этого момента */
   frozenUntil = -1;
+  /** Прилип (липучка): не ходит, но кусает, если жертва рядом */
+  stuckUntil = -1;
 
   constructor(
     scene: Scene,
@@ -268,6 +270,7 @@ export class Animal {
       const want = Math.atan2(d.x, d.z);
       this.yaw += clamp(angleDiff(this.yaw, want), -4 * dt, 4 * dt);
     }
+    if (now < this.stuckUntil) speed = 0;
     if (speed > 0) {
       // Сквозь дома и машины не ходит: если прямо нельзя — пробует обойти под углом
       let moved = false;

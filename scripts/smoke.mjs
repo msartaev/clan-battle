@@ -654,6 +654,55 @@ const browser = await chromium.launch({
     errors.push("[desktop] trader test: торговец, охранник или шипы работают не так");
   await page.evaluate(() => window.__game.resetMatch());
 
+  // Липучка: попал — враг прилип и не сходит с места; шкура зверя падает и подбирается; снаряжение
+  const stickyTest = await page.evaluate(async () => {
+    const g = window.__game;
+    g.resetMatch();
+    g.state = "playing";
+    const p = g.player;
+    const V = p.collider.position.constructor;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    const ownedDefault = [...p.owned].sort().join(",");
+    p.owned.add("sticky");
+    p.selectWeapon(5);
+    p.invulnerableUntil = g.now + 999;
+    p.collider.position.set(0, 0, -25);
+    p.yaw = 0;
+    p.pitch = 0;
+    g.setFirstPerson(true);
+    g.bots.forEach((b) => b.spawn(new V(-50, 0, 60), 0));
+    const b = g.bots.find((x) => x.clan !== p.clan && !x.guardHome);
+    b.spawn(new V(0, 0, -15), Math.PI);
+    await frames(3);
+    g.input.mouseFire = true;
+    await frames(4);
+    g.input.mouseFire = false;
+    await frames(15);
+    const stuck = b.stuckUntil > g.now;
+    const x0 = b.position.x;
+    const z0 = b.position.z;
+    await frames(30);
+    const moved = Math.hypot(b.position.x - x0, b.position.z - z0);
+    g.setFirstPerson(false);
+    // Шкура
+    const wolf = g.animals.find((a) => a.kind === "wolf");
+    wolf.spawn(new V(10, 0, 10));
+    wolf.takeDamage(999, null, g.now);
+    await frames(3);
+    const hides = g["hides"].length;
+    const l0 = g.res.leather;
+    p.collider.position.set(10, 0, 10);
+    await frames(3);
+    return { weapon: p.weapon, stuck, moved: +moved.toFixed(2), hides, leatherGained: g.res.leather - l0, ownedDefault };
+  });
+  console.log("sticky/hide test:", stickyTest);
+  if (!stickyTest.stuck || stickyTest.moved > 0.05 || stickyTest.hides < 1 || stickyTest.leatherGained < 1)
+    errors.push("[desktop] sticky/hide test: липучка или шкура работают не так");
+  await page.evaluate(() => window.__game.resetMatch());
+
   // Конец игры: три смерти
   const overTest = await page.evaluate(async () => {
     const g = window.__game;

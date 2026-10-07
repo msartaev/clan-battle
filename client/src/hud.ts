@@ -46,7 +46,7 @@ export class Hud {
     this.slots.forEach((s, i) => {
       const id = WEAPON_ORDER[i];
       const short =
-        id === "weakPistol" ? "Слабый" : id === "strongPistol" ? "Сильный" : id === "slingshot" ? "Рогатка" : id === "sword" ? "Меч" : c.weaponName;
+        id === "weakPistol" ? "Слабый" : id === "strongPistol" ? "Сильный" : id === "slingshot" ? "Рогатка" : id === "sword" ? "Меч" : id === "sticky" ? "Липучка" : c.weaponName;
       s.innerHTML = `<span>${i + 1}</span>${short}`;
     });
   }
