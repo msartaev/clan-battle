@@ -380,6 +380,11 @@ export class Sfx {
     this.burst(6000, 0.3, 0.1 * distanceVol);
   }
 
+  /** Лазер дрона: короткий высокий писк */
+  laser(distanceVol = 1): void {
+    this.tone(1800, 0.12, 0.25 * distanceVol, 0.5);
+  }
+
   /** Удар по дереву: глухой «тук» */
   chop(): void {
     this.tone(160, 0.08, 0.2, 0.7);

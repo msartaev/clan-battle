@@ -5,3 +5,4 @@ Leaf atlases LeafSet024, LeafSet019 by ambientCG (https://ambientcg.com), CC0 â€
 Bark: bark_brown_02, pine_bark from Poly Haven, CC0.
 Sky: kloofendal_48d_partly_cloudy_puresky (Poly Haven HDRI, tonemapped JPG), CC0.
 Grass: Foliage001/002/003/006 by ambientCG, CC0 â€” composited into grass_tuft.png.
+Level 2: aerial_grass_rock, corrugated_iron, rusty_corrugated_iron, dirty_concrete (Poly Haven, CC0).

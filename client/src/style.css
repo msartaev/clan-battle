@@ -1040,3 +1040,33 @@ body.touch #car-hint {
   font-weight: 700;
   opacity: 1;
 }
+
+/* ----- Выбор уровня ----- */
+#levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  align-items: center;
+  margin: 6px 0;
+  font-size: 14px;
+}
+#levels button {
+  padding: 5px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+#levels button.selected {
+  background: var(--clan, #e8551c);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 700;
+}
+#levels button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

@@ -204,6 +204,7 @@ export class Animal {
     prey: Prey[],
     walkPoint: (near: Vector3, r: number) => Vector3,
     walkable: (x: number, z: number) => boolean,
+    ground: (x: number, z: number) => number = () => 0,
   ): void {
     if (!this.alive) {
       this.deadTimer += dt;
@@ -279,7 +280,7 @@ export class Animal {
         const nx = pos.x + Math.sin(a) * speed * dt;
         const nz = pos.z + Math.cos(a) * speed * dt;
         if (walkable(nx, nz)) {
-          pos.set(nx, 0, nz);
+          pos.set(nx, ground(nx, nz), nz);
           moved = true;
           break;
         }

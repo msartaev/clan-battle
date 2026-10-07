@@ -47,6 +47,52 @@ function selectClan(c: ClanId): void {
 clanButtons.forEach((b) => b.addEventListener("click", () => selectClan(b.dataset.clan as ClanId)));
 selectClan(clan);
 
+// ----- Уровни: следующий открывается победой на предыдущем -----
+const MAX_LEVEL = 2;
+let unlocked = 1;
+try {
+  unlocked = Math.min(MAX_LEVEL, Math.max(1, Number(localStorage.getItem("cb_unlocked")) || 1));
+} catch {
+  /* нет хранилища — открыт первый */
+}
+// Для проверки и демонстрации: ?level=2 открывает уровень сразу
+let level = Math.min(MAX_LEVEL, Math.max(1, Number(params.get("level")) || 1));
+if (level > unlocked) unlocked = level;
+const levelButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("#levels button"));
+function renderLevels(): void {
+  levelButtons.forEach((b) => {
+    const n = Number(b.dataset.level);
+    b.disabled = n > unlocked;
+    b.textContent = (n > unlocked ? "🔒 " : "") + b.textContent!.replace("🔒 ", "");
+    b.classList.toggle("selected", n === level);
+  });
+}
+levelButtons.forEach((b) =>
+  b.addEventListener("click", () => {
+    const n = Number(b.dataset.level);
+    if (n > unlocked || n === level) return;
+    level = n;
+    renderLevels();
+    // Другая карта — мир строится заново
+    if (game) {
+      game.dispose();
+      game = null;
+    }
+  }),
+);
+renderLevels();
+function unlockNext(): boolean {
+  if (level < unlocked || level >= MAX_LEVEL) return false;
+  unlocked = level + 1;
+  try {
+    localStorage.setItem("cb_unlocked", String(unlocked));
+  } catch {
+    /* не сохранилось */
+  }
+  renderLevels();
+  return true;
+}
+
 // ----- Снаряжение: до 4 видов оружия и 2 видов бомб, выбор запоминается -----
 type BombKind = "weak" | "boom" | "frost";
 const LIMIT = { weapon: 4, bomb: 2 } as const;
@@ -155,7 +201,7 @@ function startGame(): void {
       }
       if (!game) {
         const q = resolvedQuality();
-        game = await Game.create(canvas, input, { clan, touch, lowFx: q !== "high", detail: QUALITY_DETAIL[q], testMode, botCount });
+        game = await Game.create(canvas, input, { clan, touch, lowFx: q !== "high", detail: QUALITY_DETAIL[q], testMode, botCount, level });
         game.setLoadout(loadout.weapon as WeaponId[], loadout.bomb as BombKind[]);
         game.resetMatch();
         game.onDeath = (lives) => {
@@ -167,7 +213,8 @@ function startGame(): void {
         game.onGameOver = (r) => {
           $("over-title").textContent = r.winner === null ? (r.reason.includes("ничья") ? "Ничья" : "Ты выбыл") : r.won ? "Победа! 🏆" : "Поражение";
           const end = /[.!]$/.test(r.reason) ? "" : ".";
-          $("over-text").textContent = `${r.reason}${end} Врагов повержено тобой: ${r.kills}`;
+          const opened = r.won && unlockNext() ? ` Открыт уровень ${unlocked}!` : "";
+          $("over-text").textContent = `${r.reason}${end} Врагов повержено тобой: ${r.kills}.${opened}`;
           showScreen("over");
           if (document.pointerLockElement) document.exitPointerLock();
         };

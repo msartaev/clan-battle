@@ -28,6 +28,8 @@ export interface BotContext {
   basePoint(clan: ClanId): { pos: Vector3; yaw: number };
   /** Бросить бомбу в цель */
   throwBomb(bot: Bot, kind: "boom" | "frost", target: Target): void;
+  /** Высота земли (склон горы) */
+  ground(x: number, z: number): number;
   /** Удар ножом вплотную */
   melee(bot: Bot, target: Target): void;
   /** Куда идти «по заданию»: штурмовикам — к вражескому флагу; null — просто бродить */
@@ -369,7 +371,7 @@ export class Bot {
     if (len > 0.05 && moveSpeed > 0) {
       move.scaleInPlace((moveSpeed * dt) / len);
       this.collider.moveWithCollisions(move);
-      pos.y = 0;
+      pos.y = ctx.ground(pos.x, pos.z);
     }
     this.speed = Vector3.Distance(before, pos) / Math.max(dt, 1e-4);
 
@@ -463,7 +465,7 @@ export class Bot {
     if (len > 0.05 && speed > 0) {
       move.scaleInPlace((speed * dt) / len);
       this.collider.moveWithCollisions(move);
-      pos.y = 0;
+      pos.y = ctx.ground(pos.x, pos.z);
     }
     this.speed = Vector3.Distance(before, pos) / Math.max(dt, 1e-4);
     if (face) {

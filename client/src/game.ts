@@ -33,6 +33,7 @@ import {
 import { Animal, type Prey } from "./animals";
 import { Humanoid } from "./humanoid";
 import { Birds } from "./birds";
+import { Drone, type DroneTarget } from "./drones";
 import { Bot, type BotContext, type Target } from "./bot";
 import { Effects, Sfx } from "./effects";
 import { Hud } from "./hud";
@@ -48,6 +49,8 @@ export interface GameOptions {
   touch: boolean;
   /** Слабое устройство: без теней, меньше частиц, ниже разрешение */
   lowFx: boolean;
+  /** Уровень (карта): 1 — деревня, 2 — большая карта с биомами */
+  level?: number;
   /** Детализация мира: 1 — «Красиво», 0.35 — «Средне», 0.15 — «Быстро» */
   detail: number;
   /** Режим автотестов: без паузы при потере курсора */
@@ -139,6 +142,8 @@ export class Game {
   private medkits: AmmoChest[] = [];
   readonly animals: Animal[] = [];
   private birds!: Birds;
+  /** Дроны леса (уровень 2) */
+  readonly drones: Drone[] = [];
   /** Ресурсы для торговца: дерево (рубить мечом) и кожа (со зверей) */
   res = { wood: 0, leather: 0 };
   /** Торговец: приходит к бункеру раз в минуту на 30 с */
@@ -253,7 +258,7 @@ export class Game {
   private build(): void {
     const { scene, opts, sun } = this;
     // На телефонах и в режиме ?low мелких деталей (трава, цветы) втрое меньше
-    this.world = new World(scene, opts.detail);
+    this.world = new World(scene, opts.detail, opts.level ?? 1);
     this.effects = new Effects(scene, opts.lowFx || opts.touch);
     this.player = new Player(scene, opts.clan);
     this.hud = new Hud(opts.clan);
@@ -291,6 +296,10 @@ export class Game {
     this.buildMedkits();
     this.spawnAnimals();
     this.birds = new Birds(this.scene, opts.detail < 1 ? 6 : 12);
+    if (this.world.level === 2) {
+      const ground = (x: number, z: number) => this.world.heightAt(x, z);
+      for (let i = 0; i < (opts.detail < 0.3 ? 2 : 3); i++) this.drones.push(new Drone(this.scene, { x0: 15, z0: 15, x1: 95, z1: 95 }, ground));
+    }
 
     if (!opts.touch && !opts.lowFx) {
       const sg = new ShadowGenerator(2048, sun);
@@ -398,7 +407,7 @@ export class Game {
     chest.isPickable = false;
     this.world.ammoSpots.forEach((p, i) => {
       const inst = chest.createInstance(`chest${i}`);
-      inst.position.set(p.x, 0.3, p.z);
+      inst.position.set(p.x, p.y + 0.3, p.z);
       inst.isPickable = false;
       this.chests.push({ mesh: inst, pos: p.clone(), active: true, respawnAt: 0 });
     });
@@ -427,25 +436,29 @@ export class Game {
     med.isPickable = false;
     // Места — свободные точки карты (детерминированно), по одной на зону
     const rnd = makeRng(31);
-    const zones: [number, number, number, number][] = [
-      [-40, -20, 40, 20],
-      [-60, 20, -15, 60],
-      [15, -60, 60, -15],
-      [-60, -60, -20, -20],
-      [20, 20, 60, 60],
-      [-20, -40, 20, -15],
-      [-20, 20, 20, 45],
-      [-40, -20, 40, 20],
-    ];
+    // Зоны уровня 1, на уровне 2 растягиваются на большую карту
+    const k = this.world.level === 2 ? 1.5 : 1;
+    const zones: [number, number, number, number][] = (
+      [
+        [-40, -20, 40, 20],
+        [-60, 20, -15, 60],
+        [15, -60, 60, -15],
+        [-60, -60, -20, -20],
+        [20, 20, 60, 60],
+        [-20, -40, 20, -15],
+        [-20, 20, 20, 45],
+        [-40, -20, 40, 20],
+      ] as [number, number, number, number][]
+    ).map(([a, b, c, d]) => [a * k, b * k, c * k, d * k]);
     zones.forEach(([x0, z0, x1, z1], i) => {
       for (let k = 0; k < 40; k++) {
         const x = x0 + rnd() * (x1 - x0);
         const z = z0 + rnd() * (z1 - z0);
         if (!this.world.isWalkable(x, z)) continue;
         const inst = med.createInstance(`medkit${i}`);
-        inst.position.set(x, 0.24, z);
+        inst.position.set(x, this.world.heightAt(x, z) + 0.24, z);
         inst.isPickable = false;
-        this.medkits.push({ mesh: inst, pos: new Vector3(x, 0, z), active: true, respawnAt: 0 });
+        this.medkits.push({ mesh: inst, pos: new Vector3(x, this.world.heightAt(x, z), z), active: true, respawnAt: 0 });
         break;
       }
     });
@@ -475,6 +488,25 @@ export class Game {
     }
   }
 
+  // ---------------- Дроны ----------------
+
+  private updateDrones(dt: number): void {
+    if (!this.drones.length) return;
+    const targets: DroneTarget[] = [this.playerPrey, ...this.bots.map((b) => this.preyOf(b))];
+    const canSee = (from: Vector3, to: Vector3) => {
+      const dir = to.subtract(from);
+      const len = dir.length();
+      return !this.scene.pickWithRay(new Ray(from, dir.scale(1 / len), len), isSolid, true)?.hit;
+    };
+    for (const d of this.drones) {
+      d.update(dt, targets, canSee);
+      if (d.lastShot) {
+        this.effects.tracer(d.lastShot.from, d.lastShot.to, true);
+        this.sfx.laser(clamp(1 - Vector3.Distance(d.pos, this.player.position) / 60, 0.05, 1));
+      }
+    }
+  }
+
   // ---------------- Торговец, охранники, шипы ----------------
 
   /** Зверь повержен игроком — шкура падает на землю, её надо подобрать */
@@ -498,7 +530,7 @@ export class Game {
     m.material = mat;
     m.isPickable = false;
     const pos = a.pos.clone();
-    m.position.set(pos.x, 0.06, pos.z);
+    m.position.set(pos.x, pos.y + 0.06, pos.z);
     this.hides.push({ mesh: m, pos, n, until: this.now + 90 });
   }
 
@@ -512,7 +544,7 @@ export class Game {
     const p = this.player;
     for (let i = this.hides.length - 1; i >= 0; i--) {
       const h = this.hides[i];
-      h.mesh.position.y = 0.06 + Math.abs(Math.sin(this.now * 2.5)) * 0.08;
+      h.mesh.position.y = h.pos.y + 0.06 + Math.abs(Math.sin(this.now * 2.5)) * 0.08;
       h.mesh.rotation.z += 0.01;
       const near = p.alive && (p.position.x - h.pos.x) ** 2 + (p.position.z - h.pos.z) ** 2 < 1.6 * 1.6;
       if (near) {
@@ -783,7 +815,7 @@ export class Game {
     const fwd = new Vector3(Math.sin(car.yaw), 0, Math.cos(car.yaw));
     const before = car.mesh.position.clone();
     car.mesh.moveWithCollisions(fwd.scale(this.carSpeed * dt));
-    car.mesh.position.y = 0;
+    car.mesh.position.y = this.world.heightAt(car.mesh.position.x, car.mesh.position.z);
     const moved = Vector3.Distance(before, car.mesh.position);
     // Врезались — скорость гаснет
     if (moved < Math.abs(this.carSpeed) * dt * 0.4) this.carSpeed *= 0.3;
@@ -1142,14 +1174,26 @@ export class Game {
   /** Стая волков и медведь в лесу, лоси на лугах */
   private spawnAnimals(): void {
     const near = (x: number, z: number) => this.world.randomWalkPoint(this.rng, new Vector3(x, 0, z), 6);
-    const place: [Animal["kind"], number, number][] = [
-      ["wolf", -36, 40],
-      ["wolf", -34, 42],
-      ["wolf", -38, 37],
-      ["bear", -52, 22],
-      ["moose", 40, 30],
-      ["moose", -15, -45],
-    ];
+    const place: [Animal["kind"], number, number][] =
+      this.world.level === 2
+        ? [
+            ["wolf", 55, 60],
+            ["wolf", 57, 62],
+            ["wolf", 53, 57],
+            ["wolf", 70, 35],
+            ["bear", 30, 80],
+            ["bear", 70, -45],
+            ["moose", -30, -15],
+            ["moose", 25, -30],
+          ]
+        : [
+            ["wolf", -36, 40],
+            ["wolf", -34, 42],
+            ["wolf", -38, 37],
+            ["bear", -52, 22],
+            ["moose", 40, 30],
+            ["moose", -15, -45],
+          ];
     for (const [kind, x, z] of place) this.animals.push(new Animal(this.scene, kind, near(x, z)));
     const p = this.player;
     const game = this;
@@ -1198,7 +1242,8 @@ export class Game {
     const prey: Prey[] = [this.playerPrey, ...this.bots.map((b) => this.preyOf(b))];
     const walkPoint = (near: Vector3, r: number) => this.world.randomWalkPoint(Math.random, near, r);
     const walkable = (x: number, z: number) => this.world.isWalkable(x, z);
-    for (const a of this.animals) a.update(dt, this.now, prey, walkPoint, walkable);
+    const ground = (x: number, z: number) => this.world.heightAt(x, z);
+    for (const a of this.animals) a.update(dt, this.now, prey, walkPoint, walkable, ground);
   }
 
   // ---------------- Матч ----------------
@@ -1406,6 +1451,7 @@ export class Game {
     for (const b of this.bots) b.update(dt, ctx);
     this.updateAnimals(dt);
     this.birds.update(dt, this.now);
+    this.updateDrones(dt);
     this.updateTrader(dt);
     this.updateSpikes();
     this.updateHides();
@@ -1587,6 +1633,16 @@ export class Game {
         target = b;
       }
     }
+    let drone: Drone | null = null;
+    for (const dr of this.drones) {
+      if (!dr.alive) continue;
+      const r = rayVsVerticalSegment(origin, dir, maxT, dr.pos.x, dr.pos.y - 0.15, dr.pos.y + 0.15, dr.pos.z);
+      if (r.dist < 0.45 && r.t < maxT) {
+        maxT = r.t;
+        target = null;
+        drone = dr;
+      }
+    }
     let beast: Animal | null = null;
     for (const a of this.animals) {
       if (!a.alive) continue;
@@ -1604,6 +1660,15 @@ export class Game {
     p.pitch -= p.weapon === "strongPistol" ? 0.018 : 0.006;
 
     const apply = () => {
+      if (drone && !beast) {
+        if (drone.takeDamage(WEAPONS[p.weapon].damage)) {
+          this.effects.explosion(drone.pos.clone(), 1.5);
+          this.sfx.boom(0.5);
+          this.hud.message("Дрон сбит!", 1.4, "#ffe14a");
+        } else this.effects.impact(end, true);
+        this.hud.hit(!drone.alive);
+        return;
+      }
       if (glassHit && !beast && !target) this.shatter(glassHit);
       if (p.weapon === "sticky") {
         if (beast && beast.alive) this.stick(beast.pos, () => (beast.stuckUntil = this.now + STICKY.stuckSec), beast.info.radius + 0.3, beast.info.name);
@@ -1752,6 +1817,7 @@ export class Game {
       randomWalkPoint: (near, radius) => this.world.randomWalkPoint(Math.random, near, radius),
       shoot: (b, t) => this.botShoot(b, t),
       throwBomb: (b, kind, t) => this.botThrow(b, kind, t),
+      ground: (x, z) => this.world.heightAt(x, z),
       melee: (b, t) => {
         const dmg = b.guardHome ? 15 : 10;
         this.sfx.swing(0.6);
@@ -1972,7 +2038,7 @@ export class Game {
         c.mesh.setEnabled(true);
       }
       if (c.active) {
-        c.mesh.position.y = 0.32 + bob;
+        c.mesh.position.y = c.pos.y + 0.32 + bob;
         c.mesh.rotation.y = this.now * 0.8;
       }
     }

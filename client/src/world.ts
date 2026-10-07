@@ -51,7 +51,8 @@ export interface BaseInfo {
   flag: Mesh;
 }
 
-export const MAP_HALF = 64;
+/** Половина стороны карты, м (уровень 1 — 64, уровень 2 — 100) */
+export let MAP_HALF = 64;
 
 /**
  * Подвал под домом №3 на главной улице (дом в (-14, 9)): люк в полу и комната под землёй.
@@ -64,6 +65,11 @@ export const CELLAR = {
   floor: -2.6,
   house: 3,
 };
+
+/** Где стоит деревня на уровне 2 (сдвиг всей деревни уровня 1) */
+export const VILLAGE2 = { x: -48, z: 48 };
+/** Гора на уровне 2: юго-восточный угол, на неё можно подняться */
+export const MOUNTAIN = { x: 58, z: -58, r: 40, h: 16 };
 
 const inRect = (r: { x0: number; x1: number; z0: number; z1: number }, x: number, z: number, m = 0) =>
   x > r.x0 - m && x < r.x1 + m && z > r.z0 - m && z < r.z1 + m;
@@ -145,6 +151,8 @@ function photoMat(scene: Scene, file: string, tint = "#ffffff"): StandardMateria
 
 export class World {
   readonly windows: WindowPane[] = [];
+  /** Где не сыпать траву и пни (бетон, полы) */
+  private noDecor: Rect[] = [];
   /** Стволы деревьев — по ним рубят дерево для торговца */
   readonly treeSpots: Vector3[] = [];
   /** Машины деревни: на них можно ездить */
@@ -153,7 +161,7 @@ export class World {
   readonly obstacles: Rect[] = [];
   readonly covers: CoverSpot[] = [];
   readonly shadowCasters: (Mesh | InstancedMesh)[] = [];
-  readonly bases: Record<ClanId, BaseInfo>;
+  bases!: Record<ClanId, BaseInfo>;
   readonly ammoSpots: Vector3[] = [];
   private rng = makeRng(20260930);
   private staticMeshes: (Mesh | InstancedMesh)[] = [];
@@ -166,7 +174,16 @@ export class World {
   private mRoof2: StandardMaterial;
   private mConcrete: StandardMaterial;
 
-  constructor(private scene: Scene, private detail = 1) {
+  /** Уровень: 1 — деревня, 2 — большая карта с биомами */
+  readonly level: number;
+
+  constructor(private scene: Scene, private detail = 1, level = 1) {
+    this.level = level;
+    MAP_HALF = level === 2 ? 100 : 64;
+    // Подвал переезжает вместе с деревней (на уровне 2 она в северо-западном углу)
+    const vo = level === 2 ? VILLAGE2 : { x: 0, z: 0 };
+    CELLAR.room = { x0: -17.4 + vo.x, x1: -10.6 + vo.x, z0: 6.6 + vo.z, z1: 11.4 + vo.z };
+    CELLAR.hole = { x0: -14.6 + vo.x, x1: -11.2 + vo.x, z0: 9.6 + vo.z, z1: 10.8 + vo.z };
     // Старые процедурные доски брали 16 чисел из генератора карты — сохраняем раскладку
     for (let i = 0; i < 16; i++) this.rng();
     this.mWood = photoMat(scene, "weathered_planks");
@@ -177,17 +194,21 @@ export class World {
     this.mConcrete = flatMat(scene, "#8b8f94");
 
     this.buildGround();
-    this.buildRoads();
-    this.buildBorder();
-    this.bases = {
-      dragons: this.buildBase("dragons", -50, -50, 0),
-      snakes: this.buildBase("snakes", 50, 50, Math.PI),
-    };
-    this.buildVillage();
-    this.buildForest();
-    this.buildHayField();
-    this.scatterAmmo();
-    this.buildStones();
+    if (level === 2) {
+      this.buildLevel2();
+    } else {
+      this.buildRoads();
+      this.buildBorder();
+      this.bases = {
+        dragons: this.buildBase("dragons", -50, -50, 0),
+        snakes: this.buildBase("snakes", 50, 50, Math.PI),
+      };
+      this.buildVillage();
+      this.buildForest();
+      this.buildHayField();
+      this.scatterAmmo();
+      this.buildStones();
+    }
     this.scatterDecor(this.detail);
 
     for (const m of this.staticMeshes) {
@@ -238,14 +259,15 @@ export class World {
     this.register(ground, "world", false);
   }
 
-  private buildRoads(): void {
-    const mat = photoMat(this.scene, "dirt_floor");
-    const roads: Rect[] = [
+  private buildRoads(
+    roads: Rect[] = [
       { x0: -46, z0: 0, x1: 46, z1: 4 }, // главная улица деревни
       { x0: 1, z0: -34, x1: 5, z1: 34 }, // поперечная
       { x0: -50, z0: -46, x1: -46, z1: 0 }, // от базы Драконов
       { x0: 46, z0: 4, x1: 50, z1: 46 }, // к базе Змей
-    ];
+    ],
+  ): void {
+    const mat = photoMat(this.scene, "dirt_floor");
     roads.forEach((r, i) => {
       const w = r.x1 - r.x0;
       const d = r.z1 - r.z0;
@@ -306,7 +328,7 @@ export class World {
 
   // ---------- Базы кланов ----------
 
-  private buildBase(clan: ClanId, cx: number, cz: number, rot: number): BaseInfo {
+  private buildBase(clan: ClanId, cx: number, cz: number, rot: number, facing?: number): BaseInfo {
     const info = CLANS[clan];
     const root = new TransformNode(`base_${clan}`, this.scene);
     root.position.set(cx, 0, cz);
@@ -388,7 +410,7 @@ export class World {
     ]);
     const flagPoint = Vector3.TransformCoordinates(new Vector3(0, 0, -2), root.getWorldMatrix());
     // Смотрим по диагонали в центр карты
-    return { clan, center, spawns, facing: rot + Math.PI / 4, flagPoint, flag };
+    return { clan, center, spawns, facing: facing ?? rot + Math.PI / 4, flagPoint, flag };
   }
 
   private flagMaterial(clan: ClanId): StandardMaterial {
@@ -564,11 +586,26 @@ export class World {
     box("cellarCrateB", r.x0 + 0.3, r.x0 + 1.0, F, F + 0.7, r.z0 + 1.5, r.z0 + 2.2, this.mWood, "world", true);
   }
 
-  /** Высота пола под точкой: в подвале — его пол, иначе земля */
+  /** Высота рельефа: на уровне 2 — гора в юго-восточном углу, иначе ровно */
+  heightAt(x: number, z: number): number {
+    if (this.level !== 2) return 0;
+    const dx = x - MOUNTAIN.x;
+    const dz = z - MOUNTAIN.z;
+    const d = Math.hypot(dx, dz);
+    if (d >= MOUNTAIN.r) return 0;
+    const t = 1 - d / MOUNTAIN.r;
+    const smooth = t * t * (3 - 2 * t);
+    // Хребты по кругу — склоны неровные, есть где спрятаться
+    const ridge = Math.sin(Math.atan2(dz, dx) * 5) * 1.6 * t * (1 - t) * 4;
+    // Плоская площадка на вершине — смотровая точка
+    return Math.min(MOUNTAIN.h * 0.92, MOUNTAIN.h * Math.pow(smooth, 1.15) + ridge);
+  }
+
+  /** Высота пола под точкой: в подвале — его пол, иначе земля или склон горы */
   floorAt(x: number, z: number, y: number): number {
     // Под землёй или прямо над люком — пол подвала
     if (inRect(CELLAR.room, x, z) && (y < -0.15 || inRect(CELLAR.hole, x, z))) return CELLAR.floor;
-    return 0;
+    return this.heightAt(x, z);
   }
 
   /** Стёкла во все окна дома или бункера (root — его корень) */
@@ -731,7 +768,7 @@ export class World {
     this.obstacles.push({ x0: x - 2.6, z0: z - 2.6, x1: x + 2.6, z1: z + 2.6 });
   }
 
-  private buildVillage(): void {
+  private buildVillage(ox = 0, oz = 0): void {
     const houses: [number, number, number][] = [
       [-16, -5, Math.PI],
       [-5, -6, Math.PI],
@@ -743,7 +780,7 @@ export class World {
       [-6, 22, Math.PI / 2],
       [14, -20, -Math.PI / 2],
     ];
-    houses.forEach(([x, z, r], i) => this.buildHouse(i, x, z, r));
+    houses.forEach(([x, z, r], i) => this.buildHouse(i, x + ox, z + oz, r));
 
     const cars: [number, number, number, string][] = [
       [-22, -1.4, Math.PI / 2, "#2f6fd6"],
@@ -753,15 +790,15 @@ export class World {
       [31, 5.6, Math.PI / 2, "#3f8f8a"],
       [-36, 5.6, -Math.PI / 2, "#3b4a3f"],
     ];
-    cars.forEach(([x, z, r, c], i) => this.buildCar(i, x, z, r, c));
+    cars.forEach(([x, z, r, c], i) => this.buildCar(i, x + ox, z + oz, r, c));
 
     // Немного сена и кустов у домов
-    this.placeHayRound(-20, 15, 0.3);
-    this.placeHayRound(18, 15, 1.2);
-    this.placeHaySquare(-2, -16, 0.2);
-    this.placeHaySquare(27, -3, 1.0);
+    this.placeHayRound(-20 + ox, 15 + oz, 0.3);
+    this.placeHayRound(18 + ox, 15 + oz, 1.2);
+    this.placeHaySquare(-2 + ox, -16 + oz, 0.2);
+    this.placeHaySquare(27 + ox, -3 + oz, 1.0);
     for (let i = 0; i < 26; i++) {
-      const p = this.findFree(-38, -24, 38, 28, 1.2);
+      const p = this.findFree(-38 + ox, -24 + oz, 38 + ox, 28 + oz, 1.2);
       if (p) this.placeBush(p.x, p.z);
     }
   }
@@ -788,7 +825,7 @@ export class World {
     const list = pine ? tb.pine : tb.broad;
     const base = list[Math.floor(pick * list.length) % list.length];
     const tree = base.createInstance(`tree_${x}_${z}`);
-    tree.position.set(x, 0, z);
+    tree.position.set(x, this.heightAt(x, z), z);
     tree.scaling.setAll(0.75 * s);
     tree.rotation.y = rot;
     // Крона закрывает обзор, но пули через неё летят
@@ -805,7 +842,7 @@ export class World {
     }
     this.treeSpots.push(new Vector3(x, 0, z));
     const trunk = this.trunkCollider.createInstance(`trunk_${x}_${z}`);
-    trunk.position.set(x, 0, z);
+    trunk.position.set(x, this.heightAt(x, z), z);
     trunk.scaling.set(s, 1, s);
     trunk.isVisible = false;
     this.register(trunk, "world", true);
@@ -817,7 +854,7 @@ export class World {
     const rot = this.rng() * 3;
     this.rngLook();
     const inst = this.trees().bush.createInstance(`bush_${x}_${z}`);
-    inst.position.set(x, 0, z);
+    inst.position.set(x, this.heightAt(x, z), z);
     // Куст ~1.2 м в высоту и ~2 м в ширину: за ним можно присесть и спрятаться
     inst.scaling.setAll(s);
     inst.rotation.y = rot;
@@ -834,7 +871,7 @@ export class World {
     const id: NatureId = tall ? "stone_tallB" : r() < 0.5 ? "stone_largeA" : "stone_largeC";
     const s = 0.8 + r() * 0.6;
     const inst = getModels().nature(id).createInstance(`stone_${x}_${z}`);
-    inst.position.set(x, -0.05, z);
+    inst.position.set(x, this.heightAt(x, z) - 0.05, z);
     // Модель уже в своих пропорциях: низкий валун ~3 м в ширину, высокий ~1.8 м в высоту
     inst.scaling.setAll((tall ? 1.8 : 0.8) * s);
     inst.rotation.y = r() * Math.PI * 2;
@@ -865,8 +902,9 @@ export class World {
         const x = (r() * 2 - 1) * (MAP_HALF - 3);
         const z = (r() * 2 - 1) * (MAP_HALF - 3);
         if (!this.isFree(x, z, 0.3)) continue;
+        if (this.noDecor.some((q) => inRect(q, x, z))) continue;
         const sc = h * (0.75 + r() * 0.5);
-        matrices.push(Matrix.Compose(new Vector3(sc, sc, sc), Quaternion.RotationYawPitchRoll(r() * Math.PI * 2, 0, 0), new Vector3(x, 0, z)));
+        matrices.push(Matrix.Compose(new Vector3(sc, sc, sc), Quaternion.RotationYawPitchRoll(r() * Math.PI * 2, 0, 0), new Vector3(x, this.heightAt(x, z), z)));
       }
       if (!matrices.length) continue;
       const buf = new Float32Array(matrices.length * 16);
@@ -993,6 +1031,237 @@ export class World {
         this.obstacles.push({ x0: p.x - 1, z0: p.z - 1, x1: p.x + 1, z1: p.z + 1 });
       }
     }
+  }
+
+  // ---------- Уровень 2: большая карта с биомами ----------
+
+  private buildLevel2(): void {
+    const V = VILLAGE2;
+    // Дороги: крест через центр (упирается в главное здание) и улицы деревни
+    this.buildRoads([
+      { x0: -82, z0: -2, x1: -12, z1: 2 },
+      { x0: 12, z0: -2, x1: 82, z1: 2 },
+      { x0: -2, z0: -95, x1: 2, z1: -9 },
+      { x0: -2, z0: 9, x1: 2, z1: 95 },
+      { x0: -46 + V.x, z0: V.z, x1: -2, z1: 4 + V.z }, // главная улица деревни → к центральной дороге
+      { x0: 1 + V.x, z0: -34 + V.z, x1: 5 + V.x, z1: 34 + V.z }, // поперечная
+    ]);
+    this.buildBorder();
+    this.bases = {
+      dragons: this.buildBase("dragons", -88, 0, Math.PI / 2, Math.PI / 2),
+      snakes: this.buildBase("snakes", 88, 0, -Math.PI / 2, -Math.PI / 2),
+    };
+    this.buildMainBuilding(0, 0);
+    this.buildVillage(V.x, V.z);
+    this.buildMountain();
+    this.buildFactory(-58, -58);
+    // Лес — северо-восточный угол
+    for (let i = 0; i < 160; i++) {
+      const p = this.findFree(12, 12, 96, 96, 1.6);
+      if (p) this.placeTree(p.x, p.z);
+    }
+    for (let i = 0; i < 70; i++) {
+      const p = this.findFree(12, 12, 96, 96, 1.0);
+      if (p) this.placeBush(p.x, p.z);
+    }
+    // Немного деревьев по всей карте
+    for (let i = 0; i < 40; i++) {
+      const p = this.findFree(-96, -96, 96, 96, 3);
+      if (p) this.placeTree(p.x, p.z);
+    }
+    // Патроны по биомам
+    const zones: [number, number, number, number][] = [
+      [-90, 20, -10, 90], [-90, 20, -10, 90], [-90, 20, -10, 90], // деревня
+      [15, 15, 90, 90], [15, 15, 90, 90], // лес
+      [25, -90, 90, -25], [25, -90, 90, -25], // гора
+      [-90, -90, -25, -25], [-90, -90, -25, -25], // завод
+      [-15, -15, 15, 15], [-30, -30, 30, 30], [-95, -95, 95, 95], [-95, -95, 95, 95], [-95, -95, 95, 95],
+    ];
+    for (const [x0, z0, x1, z1] of zones) {
+      const p = this.findFree(x0, z0, x1, z1, 1);
+      if (p) {
+        this.ammoSpots.push(new Vector3(p.x, this.heightAt(p.x, p.z), p.z));
+        this.obstacles.push({ x0: p.x - 1, z0: p.z - 1, x1: p.x + 1, z1: p.z + 1 });
+      }
+    }
+    // Валуны по всей карте
+    for (let i = 0; i < 26; i++) {
+      const p = this.findFree(-96, -96, 96, 96, 3);
+      if (p) this.placeStone(p.x, p.z);
+    }
+  }
+
+  /** Гора: рельеф с хребтами, скальная трава, ели и валуны на склонах; на вершине — обзор */
+  private buildMountain(): void {
+    const M = MOUNTAIN;
+    const size = M.r * 2 + 2;
+    const g = MeshBuilder.CreateGround("mountain", { width: size, height: size, subdivisions: 72, updatable: true }, this.scene);
+    g.position.set(M.x, 0, M.z);
+    g.bakeCurrentTransformIntoVertices();
+    const pos = g.getVerticesData(VertexBuffer.PositionKind)!;
+    for (let i = 0; i < pos.length; i += 3) pos[i + 1] = this.heightAt(pos[i], pos[i + 2]) + 0.02;
+    g.updateVerticesData(VertexBuffer.PositionKind, pos);
+    // Оставляем только треугольники внутри круга горы — без квадратной «заплатки» на земле
+    const all = g.getIndices()!;
+    const keep: number[] = [];
+    for (let i = 0; i < all.length; i += 3) {
+      const inside = [all[i], all[i + 1], all[i + 2]].some((v) => Math.hypot(pos[v * 3] - M.x, pos[v * 3 + 2] - M.z) < M.r - 1);
+      if (inside) keep.push(all[i], all[i + 1], all[i + 2]);
+    }
+    g.setIndices(keep);
+    const nrm: number[] = [];
+    VertexData.ComputeNormals(pos, keep, nrm);
+    g.updateVerticesData(VertexBuffer.NormalKind, nrm);
+    projectUV(g, 8);
+    g.material = photoMat(this.scene, "aerial_grass_rock");
+    // На вершине не сажаем ничего, кроме камней
+    this.obstacles.push({ x0: M.x - 9, z0: M.z - 9, x1: M.x + 9, z1: M.z + 9 });
+    g.receiveShadows = true;
+    this.register(g, "world", false);
+    for (let i = 0; i < 34; i++) {
+      const a = this.rng() * Math.PI * 2;
+      // Вершина свободна от деревьев — оттуда обзор на всю карту
+      const d = 11 + this.rng() * (M.r - 13);
+      const x = M.x + Math.cos(a) * d;
+      const z = M.z + Math.sin(a) * d;
+      if (this.isFree(x, z, 2)) this.placeTree(x, z);
+    }
+    for (let i = 0; i < 18; i++) {
+      const a = this.rng() * Math.PI * 2;
+      const d = 4 + this.rng() * (M.r - 6);
+      const x = M.x + Math.cos(a) * d;
+      const z = M.z + Math.sin(a) * d;
+      if (this.isFree(x, z, 2)) this.placeStone(x, z);
+    }
+  }
+
+  /** Главное здание в центре карты: бетонный зал с дверями на все четыре стороны */
+  private buildMainBuilding(cx: number, cz: number): void {
+    const w = 22;
+    const d = 16;
+    const h = 4.2;
+    const root = new TransformNode("mainBuilding", this.scene);
+    root.position.set(cx, 0, cz);
+    const concrete = photoMat(this.scene, "dirty_concrete", "#e6e6e6");
+    const win = (x: number) => ({ x, w: 1.6, b: 1.3, t: 2.8 });
+    const door = { x: 0, w: 2.4, b: 0, t: 3.0 };
+    const specs: WindowSpec[] = [];
+    const walls = this.buildWalls(
+      "mainHall",
+      w,
+      d,
+      h,
+      concrete,
+      [
+        [door, win(-7), win(7), win(-3.8), win(3.8)],
+        [door, win(-7), win(7), win(-3.8), win(3.8)],
+        [door, win(-4.5), win(4.5)],
+        [door, win(-4.5), win(4.5)],
+      ],
+      specs,
+    );
+    walls.parent = root;
+    this.register(walls, "world", true, true);
+    this.glaze("mainHall", root, specs);
+    const roof = MeshBuilder.CreateBox("mainRoof", { width: w + 0.6, height: 0.35, depth: d + 0.6 }, this.scene);
+    roof.parent = root;
+    roof.position.y = h + 0.17;
+    roof.material = concrete;
+    projectUV(roof, 3);
+    this.register(roof, "world", true, true);
+    const floor = MeshBuilder.CreateBox("mainFloor", { width: w - 0.4, height: 0.05, depth: d - 0.4 }, this.scene);
+    floor.parent = root;
+    floor.position.y = 0.03;
+    floor.material = flatMat(this.scene, "#6f6a62");
+    this.register(floor, null, false);
+    // Колонны и ящики внутри — укрытия
+    for (const [x, z] of [[-5, -3], [5, -3], [-5, 3], [5, 3]]) {
+      const c = MeshBuilder.CreateBox("mainCol", { width: 0.7, height: h, depth: 0.7 }, this.scene);
+      c.parent = root;
+      c.position.set(x, h / 2, z);
+      c.material = concrete;
+      projectUV(c, 2);
+      this.register(c, "world", true, true);
+    }
+    for (const [x, z] of [[-8, 5.5], [8, -5.5], [0, 5]]) {
+      const b = MeshBuilder.CreateBox("mainCrate", { width: 1.4, height: 1.1, depth: 1.4 }, this.scene);
+      b.parent = root;
+      b.position.set(x, 0.55, z);
+      b.material = this.mWood2;
+      projectUV(b, 1.5);
+      this.register(b, "world", true, true);
+    }
+    root.computeWorldMatrix(true);
+    for (const c of root.getChildMeshes()) c.computeWorldMatrix(true);
+    this.obstacles.push({ x0: cx - w / 2 - 2, z0: cz - d / 2 - 2, x1: cx + w / 2 + 2, z1: cz + d / 2 + 2 });
+  }
+
+  /** Завод: два цеха из профнастила, труба, контейнеры — много укрытий для перестрелок */
+  private buildFactory(cx: number, cz: number): void {
+    const iron = photoMat(this.scene, "corrugated_iron", "#d8d8d8");
+    const rusty = photoMat(this.scene, "rusty_corrugated_iron");
+    const shed = (name: string, x: number, z: number, w: number, d: number, h: number, mat: StandardMaterial) => {
+      const root = new TransformNode(name, this.scene);
+      root.position.set(x, 0, z);
+      const gate = { x: 0, w: 4.5, b: 0, t: 4.2 };
+      const win = (px: number) => ({ x: px, w: 2, b: 2.2, t: 3.4 });
+      const specs: WindowSpec[] = [];
+      const walls = this.buildWalls(name, w, d, h, mat, [[gate, win(-w / 3), win(w / 3)], [gate], [{ x: 0, w: 1.4, b: 0, t: 2.4 }, win(-d / 4)], [win(d / 4)]], specs);
+      walls.parent = root;
+      this.register(walls, "world", true, true);
+      this.glaze(name, root, specs);
+      const roof = MeshBuilder.CreateBox(`${name}Roof`, { width: w + 0.8, height: 0.25, depth: d + 0.8 }, this.scene);
+      roof.parent = root;
+      roof.position.y = h + 0.12;
+      roof.material = rusty;
+      projectUV(roof, 3);
+      this.register(roof, "world", true, true);
+      root.computeWorldMatrix(true);
+      for (const c of root.getChildMeshes()) c.computeWorldMatrix(true);
+      this.obstacles.push({ x0: x - w / 2 - 1.5, z0: z - d / 2 - 1.5, x1: x + w / 2 + 1.5, z1: z + d / 2 + 1.5 });
+    };
+    shed("factoryA", cx - 4, cz + 8, 26, 14, 6.5, iron);
+    shed("factoryB", cx + 14, cz - 12, 14, 10, 5, rusty);
+    // Труба
+    const chimney = MeshBuilder.CreateCylinder("chimney", { height: 24, diameterTop: 1.8, diameterBottom: 2.8, tessellation: 16 }, this.scene);
+    chimney.position.set(cx - 22, 12, cz - 20);
+    chimney.material = photoMat(this.scene, "dirty_concrete", "#b9a89a");
+    projectUV(chimney, 3);
+    this.register(chimney, "world", true, true);
+    this.obstacles.push({ x0: cx - 24, z0: cz - 22, x1: cx - 20, z1: cz - 18 });
+    // Морские контейнеры, местами в два яруса
+    const colors = ["#2f5f9e", "#a8382a", "#3f7f3a", "#c9862a", "#2f5f9e", "#6b6f75"];
+    const spots: [number, number, number, boolean][] = [
+      [cx - 12, cz - 26, 0.1, true],
+      [cx - 4, cz - 28, 0.05, false],
+      [cx + 4, cz - 26, 1.57, false],
+      [cx - 26, cz - 4, 1.57, true],
+      [cx + 26, cz + 6, 0.3, false],
+      [cx + 20, cz + 20, 1.2, false],
+      [cx - 20, cz + 22, 0.0, true],
+      [cx + 6, cz - 2, 0.8, false],
+    ];
+    spots.forEach(([x, z, rot, stack], i) => {
+      for (let lvl = 0; lvl < (stack ? 2 : 1); lvl++) {
+        const c = MeshBuilder.CreateBox(`container${i}_${lvl}`, { width: 6, height: 2.6, depth: 2.45 }, this.scene);
+        c.position.set(x, 1.3 + lvl * 2.6, z);
+        c.rotation.y = rot + lvl * 0.08;
+        c.material = photoMat(this.scene, "corrugated_iron", colors[(i + lvl) % colors.length]);
+        projectUV(c, 2.5);
+        this.register(c, "world", true, true);
+      }
+      this.covers.push({ x, z, r: 3.2 });
+      this.obstacles.push({ x0: x - 3.4, z0: z - 3.4, x1: x + 3.4, z1: z + 3.4 });
+    });
+    // Бетонная площадка завода
+    const pad = MeshBuilder.CreateGround("factoryPad", { width: 64, height: 64 }, this.scene);
+    pad.position.set(cx, 0.015, cz);
+    projectUV(pad, 5);
+    pad.material = photoMat(this.scene, "dirty_concrete", "#9a9a98");
+    pad.receiveShadows = true;
+    this.register(pad, null, false);
+    // На бетоне трава не растёт
+    this.noDecor.push({ x0: cx - 32, z0: cz - 32, x1: cx + 32, z1: cz + 32 });
   }
 
   // ---------- Свободные точки ----------

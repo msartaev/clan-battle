@@ -806,6 +806,42 @@ const browser = await chromium.launch({
   await ctx.close();
 }
 
+// ---------- Уровень 2: большая карта ----------
+{
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  const page = await ctx.newPage();
+  watch(page, "level2");
+  await page.goto(URL + "?test&level=2", { waitUntil: "load" });
+  await page.click("#play");
+  await page.waitForFunction(() => !!window.__game, null, { timeout: 180000 });
+  const l2 = await page.evaluate(async () => {
+    const g = window.__game;
+    const V = g.player.collider.position.constructor;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    g.player.invulnerableUntil = g.now + 999;
+    // На вершину горы
+    g.player.collider.position.set(58, 20, -58);
+    await frames(6);
+    const topY = +g.player.position.y.toFixed(1);
+    // Бот на склоне стоит на земле, а не в воздухе/под землёй
+    const b = g.bots.find((x) => x.clan !== g.player.clan);
+    b.spawn(new V(58, 0, -40), 0);
+    await frames(4);
+    const slopeY = +b.position.y.toFixed(1);
+    const groundY = +g.world.heightAt(b.position.x, b.position.z).toFixed(1);
+    const droneShot = g.drones[0].takeDamage(999);
+    return { level: g.world.level, topY, slopeY, groundY, drones: g.drones.length, droneShot, trees: g.world.treeSpots.length };
+  });
+  console.log("level 2:", l2);
+  if (l2.level !== 2 || l2.topY < 10 || Math.abs(l2.slopeY - l2.groundY) > 0.3 || l2.drones < 2 || !l2.droneShot)
+    errors.push("[level2] большая карта, гора или дроны работают не так");
+  await page.screenshot({ path: path.join(shots, "09-level2-mountain-top.png") });
+  await ctx.close();
+}
+
 await browser.close();
 console.log("\nconsole/page errors:", errors.length ? errors : "none");
 process.exit(errors.length ? 1 : 0);
