@@ -676,11 +676,14 @@ const browser = await chromium.launch({
     g.bots.forEach((b) => b.spawn(new V(-50, 0, 60), 0));
     const b = g.bots.find((x) => x.clan !== p.clan && !x.guardHome);
     b.spawn(new V(0, 0, -15), Math.PI);
+    // Пока летит шар слизи, бот стоит (иначе он иногда успевает отойти — тест «мигает»)
+    b.update = () => {};
     await frames(3);
     g.input.mouseFire = true;
     await frames(4);
     g.input.mouseFire = false;
     await frames(15);
+    delete b.update;
     const stuck = b.stuckUntil > g.now;
     const x0 = b.position.x;
     const z0 = b.position.z;
@@ -839,6 +842,49 @@ const browser = await chromium.launch({
   if (l2.level !== 2 || l2.topY < 10 || Math.abs(l2.slopeY - l2.groundY) > 0.3 || l2.drones < 2 || !l2.droneShot)
     errors.push("[level2] большая карта, гора или дроны работают не так");
   await page.screenshot({ path: path.join(shots, "09-level2-mountain-top.png") });
+  await ctx.close();
+}
+
+// ---------- Уровень 3: соло на заводе ----------
+{
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  const page = await ctx.newPage();
+  watch(page, "level3");
+  await page.goto(URL + "?test&level=3", { waitUntil: "load" });
+  await page.click("#play");
+  await page.waitForFunction(() => !!window.__game, null, { timeout: 180000 });
+  const l3 = await page.evaluate(async () => {
+    const g = window.__game;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    const allies = g.bots.filter((b) => b.clan === g.player.clan).length;
+    const enemies = g.bots.filter((b) => b.clan !== g.player.clan).length;
+    // Аптечка: подобрали — после времени появляется в другом месте
+    const m = g["medkits"][0];
+    const before = m.pos.clone();
+    g.player.hp = 50;
+    g.player.collider.position.set(m.pos.x, 0, m.pos.z);
+    await frames(3);
+    m.respawnAt = g.now;
+    g.player.collider.position.set(0, 0, 40);
+    await frames(3);
+    const moved = Math.hypot(m.pos.x - before.x, m.pos.z - before.z);
+    // Все враги выбыли — победа
+    let result = null;
+    const orig = g.onGameOver;
+    g.onGameOver = (r) => (result = r);
+    for (const b of g.bots) if (b.clan !== g.player.clan) {
+      b.lives = 1;
+      b.takeDamage(999, g.player.position, g.now);
+    }
+    await frames(3);
+    g.onGameOver = orig;
+    return { level: g.world.level, allies, enemies, medkitMoved: +moved.toFixed(1), won: result?.won, reason: result?.reason };
+  });
+  console.log("level 3:", l3);
+  if (l3.level !== 3 || l3.allies !== 0 || l3.enemies !== 4 || l3.medkitMoved < 1 || !l3.won) errors.push("[level3] соло-уровень работает не так");
   await ctx.close();
 }
 

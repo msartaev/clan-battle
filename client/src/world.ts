@@ -179,11 +179,16 @@ export class World {
 
   constructor(private scene: Scene, private detail = 1, level = 1) {
     this.level = level;
-    MAP_HALF = level === 2 ? 100 : 64;
+    MAP_HALF = level === 2 ? 100 : level === 3 ? 45 : 64;
     // Подвал переезжает вместе с деревней (на уровне 2 она в северо-западном углу)
     const vo = level === 2 ? VILLAGE2 : { x: 0, z: 0 };
     CELLAR.room = { x0: -17.4 + vo.x, x1: -10.6 + vo.x, z0: 6.6 + vo.z, z1: 11.4 + vo.z };
     CELLAR.hole = { x0: -14.6 + vo.x, x1: -11.2 + vo.x, z0: 9.6 + vo.z, z1: 10.8 + vo.z };
+    if (level === 3) {
+      // Деревни нет — «люк» уводим за забор, крошечный и незаметный
+      CELLAR.room = { x0: 70, x1: 70.2, z0: 70, z1: 70.2 };
+      CELLAR.hole = { x0: 70, x1: 70.2, z0: 70, z1: 70.2 };
+    }
     // Старые процедурные доски брали 16 чисел из генератора карты — сохраняем раскладку
     for (let i = 0; i < 16; i++) this.rng();
     this.mWood = photoMat(scene, "weathered_planks");
@@ -196,6 +201,8 @@ export class World {
     this.buildGround();
     if (level === 2) {
       this.buildLevel2();
+    } else if (level === 3) {
+      this.buildLevel3();
     } else {
       this.buildRoads();
       this.buildBorder();
@@ -1088,6 +1095,33 @@ export class World {
     for (let i = 0; i < 26; i++) {
       const p = this.findFree(-96, -96, 96, 96, 3);
       if (p) this.placeStone(p.x, p.z);
+    }
+  }
+
+  // ---------- Уровень 3: соло на заводе ----------
+
+  private buildLevel3(): void {
+    this.buildBorder();
+    this.bases = {
+      dragons: this.buildBase("dragons", -36, 36, Math.PI * 0.75, Math.PI * 0.75),
+      snakes: this.buildBase("snakes", 36, -36, -Math.PI * 0.25, -Math.PI * 0.25),
+    };
+    this.buildFactory(0, 0);
+    // Немного кустов и валунов по краям — дополнительные укрытия
+    for (let i = 0; i < 18; i++) {
+      const p = this.findFree(-42, -42, 42, 42, 1.2);
+      if (p) this.placeBush(p.x, p.z);
+    }
+    for (let i = 0; i < 8; i++) {
+      const p = this.findFree(-42, -42, 42, 42, 2.5);
+      if (p) this.placeStone(p.x, p.z);
+    }
+    for (let i = 0; i < 12; i++) {
+      const p = this.findFree(-42, -42, 42, 42, 1);
+      if (p) {
+        this.ammoSpots.push(new Vector3(p.x, 0, p.z));
+        this.obstacles.push({ x0: p.x - 1, z0: p.z - 1, x1: p.x + 1, z1: p.z + 1 });
+      }
     }
   }
 

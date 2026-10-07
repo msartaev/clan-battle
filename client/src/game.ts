@@ -266,10 +266,13 @@ export class Game {
 
     // Команды 5 на 5: сначала враги (botCount), потом союзники — на одного меньше, ведь игрок тоже в команде
     const enemy = enemyClan(opts.clan);
-    for (let i = 0; i < opts.botCount; i++) {
+    const enemies = (opts.level ?? 1) === 3 ? Math.min(4, opts.botCount) : opts.botCount;
+    for (let i = 0; i < enemies; i++) {
       this.bots.push(new Bot(scene, enemy, BOT_WEAPONS[i % BOT_WEAPONS.length]));
     }
-    for (let i = 0; i < opts.botCount - 1; i++) {
+    // Уровень 3 — соло: союзников нет
+    const allies = (opts.level ?? 1) === 3 ? 0 : opts.botCount - 1;
+    for (let i = 0; i < allies; i++) {
       this.bots.push(new Bot(scene, opts.clan, BOT_WEAPONS[(i + 1) % BOT_WEAPONS.length], true));
     }
     // В каждой команде двое штурмовиков: в свободное время идут за вражеским флагом
@@ -437,7 +440,7 @@ export class Game {
     // Места — свободные точки карты (детерминированно), по одной на зону
     const rnd = makeRng(31);
     // Зоны уровня 1, на уровне 2 растягиваются на большую карту
-    const k = this.world.level === 2 ? 1.5 : 1;
+    const k = this.world.level === 2 ? 1.5 : this.world.level === 3 ? 0.65 : 1;
     const zones: [number, number, number, number][] = (
       [
         [-40, -20, 40, 20],
@@ -471,6 +474,7 @@ export class Game {
         if (this.now >= m.respawnAt) {
           m.active = true;
           m.mesh.setEnabled(true);
+          this.relocate(m, 0.24);
         }
         continue;
       }
@@ -1175,7 +1179,9 @@ export class Game {
   private spawnAnimals(): void {
     const near = (x: number, z: number) => this.world.randomWalkPoint(this.rng, new Vector3(x, 0, z), 6);
     const place: [Animal["kind"], number, number][] =
-      this.world.level === 2
+      this.world.level === 3
+        ? []
+        : this.world.level === 2
         ? [
             ["wolf", 55, 60],
             ["wolf", 57, 62],
@@ -1768,8 +1774,8 @@ export class Game {
         return;
       }
     }
-    // Захват флагов
-    for (const owner of ["dragons", "snakes"] as const) {
+    // Захват флагов (на соло-уровне флагов нет — только перестрелка)
+    for (const owner of this.world.level === 3 ? [] : (["dragons", "snakes"] as const)) {
       const base = this.world.bases[owner];
       const cap = this.capture[owner];
       const inZone = (t: Target) =>
@@ -1826,6 +1832,7 @@ export class Game {
         else if (this.state === "playing") this.damagePlayer(dmg);
       },
       objective: (b) => {
+        if (this.world.level === 3) return null;
         // Свой флаг захватывают — все бегут защищать; иначе штурмовики идут за чужим
         if (this.capture[b.clan].by) return this.world.bases[b.clan].flagPoint;
         return b.attacker ? this.world.bases[enemyClan(b.clan)].flagPoint : null;
@@ -2036,12 +2043,21 @@ export class Game {
       if (!c.active && this.now >= c.respawnAt) {
         c.active = true;
         c.mesh.setEnabled(true);
+        this.relocate(c);
       }
       if (c.active) {
         c.mesh.position.y = c.pos.y + 0.32 + bob;
         c.mesh.rotation.y = this.now * 0.8;
       }
     }
+  }
+
+  /** Уровень 3: ресурс появляется снова, но в другом случайном месте */
+  private relocate(c: AmmoChest, lift = 0.3): void {
+    if (this.world.level !== 3) return;
+    const p = this.world.randomWalkPoint(Math.random);
+    c.pos.set(p.x, this.world.heightAt(p.x, p.z), p.z);
+    c.mesh.position.set(p.x, c.pos.y + lift, p.z);
   }
 
   // ---------------- Служебное ----------------
