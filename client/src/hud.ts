@@ -106,8 +106,8 @@ export class Hud {
     this.set("owned", s.owned.join(","), () => {
       this.slots.forEach((el, i) => (el.style.display = s.owned.includes(WEAPON_ORDER[i]) ? "" : "none"));
     });
-    this.set("weapon", `${s.weapon}${s.swordLevel}`, () => {
-      this.weaponName.textContent = weaponDisplayName(s.weapon, this.clan, s.swordLevel);
+    this.set("weapon", `${s.weapon}${s.swordLevel}${s.owned.length ? "" : "-none"}`, () => {
+      this.weaponName.textContent = s.owned.length ? weaponDisplayName(s.weapon, this.clan, s.swordLevel) : "Без оружия";
       const idx = WEAPON_ORDER.indexOf(s.weapon);
       this.slots.forEach((el, i) => el.classList.toggle("active", i === idx));
     });

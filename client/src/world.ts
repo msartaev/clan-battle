@@ -19,7 +19,7 @@ import { CLANS, type ClanId } from "@clan-battle/shared";
 import { flatMat } from "./humanoid";
 import { getModels, type NatureId } from "./models";
 import { buildTreeBases, grassTuftMesh, type TreeBases } from "./trees";
-import { buildCarMesh, type CarKind } from "./cars";
+import { buildCarMesh, buildTractorMesh, type CarKind } from "./cars";
 import { makeRng } from "./utils";
 
 /** Тип объекта для выстрелов и видимости */
@@ -193,6 +193,8 @@ export class World {
   /** Деревья, которые можно срубить: крона, невидимый ствол, препятствие для ботов */
   readonly treeList: TreeInfo[] = [];
   track: Track | null = null;
+  /** Уровень 6: сундуки с оружием у баз (открыть — E) */
+  readonly weaponChests: { pos: Vector3; clan: ClanId; lid: Mesh; open: boolean }[] = [];
   /** Зрители на трибунах (уровень 5) — машут руками */
   fans: Mesh | null = null;
   /** Машины деревни: на них можно ездить */
@@ -219,7 +221,7 @@ export class World {
 
   constructor(private scene: Scene, private detail = 1, level = 1) {
     this.level = level;
-    MAP_HALF = level === 2 || level === 5 ? 100 : level === 3 ? 45 : level === 4 ? 50 : 64;
+    MAP_HALF = level === 2 || level === 5 || level === 6 ? 100 : level === 3 ? 45 : level === 4 ? 50 : 64;
     // Подвал переезжает вместе с деревней (на уровне 2 она в северо-западном углу)
     const vo = level === 2 ? VILLAGE2 : { x: 0, z: 0 };
     CELLAR.room = { x0: -17.4 + vo.x, x1: -10.6 + vo.x, z0: 6.6 + vo.z, z1: 11.4 + vo.z };
@@ -247,6 +249,8 @@ export class World {
       this.buildLevel4();
     } else if (level === 5) {
       this.buildLevel5();
+    } else if (level === 6) {
+      this.buildLevel6();
     } else {
       this.buildRoads();
       this.buildBorder();
@@ -802,9 +806,9 @@ export class World {
     this.obstacles.push({ x0: x - ext[0] - 1.5, z0: z - ext[1] - 1.5, x1: x + ext[0] + 1.5, z1: z + ext[1] + 1.5 });
   }
 
-  private buildCar(i: number, x: number, z: number, rotY: number, color: string): void {
+  private buildCar(i: number, x: number, z: number, rotY: number, color: string, tractor = false): void {
     const kinds: CarKind[] = ["sedan", "suv", "pickup", "sedan", "suv", "sedan"];
-    const car = buildCarMesh(this.scene, `car${i}`, kinds[i % kinds.length], color);
+    const car = tractor ? buildTractorMesh(this.scene, `tractor${i}`, color) : buildCarMesh(this.scene, `car${i}`, kinds[i % kinds.length], color);
     car.position.set(x, 0, z);
     // Модель вытянута вдоль x, а раскладка задаёт «перёд» по z
     car.rotation.y = rotY - Math.PI / 2;
@@ -901,6 +905,169 @@ export class World {
     const rect = { x0: x - 1.2, z0: z - 1.2, x1: x + 1.2, z1: z + 1.2 };
     this.obstacles.push(rect);
     this.treeList.push({ pos: new Vector3(x, this.heightAt(x, z), z), mesh: tree, trunk, rect, rot, pine, hp: TREE_HP, fallT: 0, fallDir: 0 });
+  }
+
+  // ---------- Уровень 6: большая ферма с тракторами ----------
+
+  private buildLevel6(): void {
+    this.buildBorder();
+    this.bases = {
+      dragons: this.buildFarmBase("dragons", -78, -78, Math.PI / 4),
+      snakes: this.buildFarmBase("snakes", 78, 78, Math.PI + Math.PI / 4),
+    };
+    // Грунтовые дороги крестом через всю ферму
+    const dirt = photoMat(this.scene, "dirt_floor", "#c8b090");
+    for (const [w, h] of [[200, 7], [7, 200]]) {
+      const road = MeshBuilder.CreateGround("farmRoad", { width: w, height: h }, this.scene);
+      road.position.y = 0.015;
+      projectUV(road, 5);
+      road.material = dirt;
+      road.receiveShadows = true;
+      this.register(road, null, false);
+    }
+    this.obstacles.push({ x0: -100, z0: -5, x1: 100, z1: 5 }, { x0: -5, z0: -100, x1: 5, z1: 100 });
+    // Поля: пшеница (сухая трава с тюками) и вспаханные грядки
+    const rows = new DynamicTexture("cropRows", { width: 128, height: 128 }, this.scene, true);
+    const rc = rows.getContext() as CanvasRenderingContext2D;
+    for (let y = 0; y < 128; y += 16) {
+      rc.fillStyle = "#6b4f33";
+      rc.fillRect(0, y, 128, 9);
+      rc.fillStyle = "#4f7a2c";
+      rc.fillRect(0, y + 9, 128, 7);
+    }
+    rows.update();
+    const rowsMat = new StandardMaterial("cropRowsMat", this.scene);
+    rowsMat.diffuseTexture = rows;
+    rowsMat.specularColor.set(0, 0, 0);
+    const fields: [number, number, number, number, boolean][] = [
+      [-50, 30, 70, 50, true], [40, -50, 60, 60, true], [-30, -40, 40, 30, false], [35, 30, 40, 30, false], [-75, 30, 30, 50, false], [75, -20, 30, 40, false],
+    ];
+    for (const [x, z, w, h, wheat] of fields) {
+      const f = MeshBuilder.CreateGround("field", { width: w, height: h }, this.scene);
+      f.position.set(x, 0.01, z);
+      if (wheat) {
+        projectUV(f, 6);
+        f.material = photoMat(this.scene, "withered_grass");
+      } else {
+        projectUV(f, 8);
+        f.material = rowsMat;
+      }
+      f.receiveShadows = true;
+      this.register(f, null, false);
+      if (wheat) {
+        for (let i = 0; i < 14; i++) {
+          const p = this.findFree(x - w / 2 + 2, z - h / 2 + 2, x + w / 2 - 2, z + h / 2 - 2, 1.5);
+          if (p) (i % 3 ? this.placeHayRound(p.x, p.z, this.rng() * Math.PI) : this.placeHaySquare(p.x, p.z, this.rng() * Math.PI));
+        }
+      }
+    }
+    // Хутора: дома, амбары, силосные башни
+    const homes: [number, number, number][] = [[-14, 16, 0], [14, 16, Math.PI], [-14, -16, 0], [16, -15, Math.PI], [-60, -45, Math.PI / 2], [60, 45, -Math.PI / 2], [-40, 70, 0], [45, -75, Math.PI]];
+    homes.forEach(([x, z, r], i) => {
+      if (this.isFree(x, z, 5)) this.buildHouse(i % 3, x, z, r);
+    });
+    for (const [x, z] of [[-62, -62], [62, 62], [22, 22], [-22, -22]]) this.buildSilo(x, z);
+    // Тракторы, на которых можно ездить
+    const tractors: [number, number, number, string][] = [
+      [-60, -78, 0, "#2f7d32"], [78, 60, Math.PI, "#2f7d32"], [-8, 30, Math.PI / 2, "#c62828"], [10, -32, -Math.PI / 2, "#1565c0"], [-80, 10, 0, "#f9a825"], [80, -10, Math.PI, "#f9a825"],
+    ];
+    tractors.forEach(([x, z, r, c], i) => this.buildCar(i, x, z, r, c, true));
+    // Деревья — лесополосы вдоль дорог и по краям
+    for (let i = 0; i < 90; i++) {
+      const p = this.findFree(-95, -95, 95, 95, 2.2);
+      if (p) this.placeTree(p.x, p.z);
+    }
+    for (let i = 0; i < 40; i++) {
+      const p = this.findFree(-95, -95, 95, 95, 1.2);
+      if (p) this.placeBush(p.x, p.z);
+    }
+    // Патроны по всей ферме
+    for (let i = 0; i < 14; i++) {
+      const p = this.findFree(-90, -90, 90, 90, 1);
+      if (p) {
+        this.ammoSpots.push(new Vector3(p.x, 0, p.z));
+        this.obstacles.push({ x0: p.x - 1, z0: p.z - 1, x1: p.x + 1, z1: p.z + 1 });
+      }
+    }
+  }
+
+  /** Силосная башня: высокий цилиндр с куполом */
+  private buildSilo(x: number, z: number): void {
+    const body = MeshBuilder.CreateCylinder("silo", { diameter: 4, height: 11, tessellation: 20 }, this.scene);
+    body.position.set(x, 5.5, z);
+    projectUV(body, 4);
+    body.material = photoMat(this.scene, "corrugated_iron", "#d8d8d8");
+    this.register(body, "world", true, true);
+    const dome = MeshBuilder.CreateSphere("siloDome", { diameter: 4.1, segments: 12, slice: 0.5 }, this.scene);
+    dome.position.set(x, 11, z);
+    dome.material = flatMat(this.scene, "#8f2f24");
+    this.register(dome, "world", false, true);
+    this.covers.push({ x, z, r: 2.6 });
+    this.obstacles.push({ x0: x - 3, z0: z - 3, x1: x + 3, z1: z + 3 });
+  }
+
+  /**
+   * База на ферме: площадка, трактор клана (его и надо угнать), флаг над ним,
+   * тюки сена для укрытия и сундук с оружием — все начинают без оружия
+   */
+  private buildFarmBase(clan: ClanId, cx: number, cz: number, rot: number): BaseInfo {
+    const info = CLANS[clan];
+    const pad = MeshBuilder.CreateCylinder(`pad_${clan}`, { diameter: 20, height: 0.06, tessellation: 24 }, this.scene);
+    pad.material = flatMat(this.scene, Color3.FromHexString(info.color).scale(0.55).toHexString());
+    pad.position.set(cx, 0.03, cz);
+    pad.receiveShadows = true;
+    this.register(pad, null, false);
+    const fwd = new Vector3(Math.sin(rot), 0, Math.cos(rot));
+    const right = new Vector3(Math.cos(rot), 0, -Math.sin(rot));
+    const center = new Vector3(cx, 0, cz);
+    // Трактор клана — стоит в центре базы, на нём не уехать: его угоняют, удерживая зону
+    const tractor = buildTractorMesh(this.scene, `clanTractor_${clan}`, info.color);
+    tractor.position.copyFrom(center);
+    tractor.rotation.y = rot - Math.PI / 2;
+    tractor.scaling.setAll(1.35);
+    tractor.receiveShadows = true;
+    this.register(tractor, "world", true, true);
+    // Флаг на шесте рядом
+    const poleAt = center.add(right.scale(3));
+    const pole = MeshBuilder.CreateCylinder(`pole_${clan}`, { diameter: 0.1, height: 7.5, tessellation: 6 }, this.scene);
+    pole.position.set(poleAt.x, 3.75, poleAt.z);
+    pole.material = flatMat(this.scene, "#d9d9d9");
+    this.register(pole, null, false, true);
+    const flag = MeshBuilder.CreatePlane(`flag_${clan}`, { width: 2.2, height: 1.3, sideOrientation: Mesh.DOUBLESIDE }, this.scene);
+    flag.position.set(poleAt.x + 1.1 * Math.cos(rot), 7.2, poleAt.z - 1.1 * Math.sin(rot));
+    flag.rotation.y = rot;
+    flag.material = this.flagMaterial(clan);
+    this.register(flag, null, false, true);
+    // Тюки сена — укрытие
+    for (const s of [-1, 1]) {
+      const at = center.add(fwd.scale(4)).add(right.scale(s * 5));
+      this.placeHaySquare(at.x, at.z, rot);
+    }
+    // Сундук с оружием у точки появления
+    const chestAt = center.add(fwd.scale(9));
+    const chest = MeshBuilder.CreateBox(`wchest_${clan}`, { width: 1.3, height: 0.7, depth: 0.8 }, this.scene);
+    chest.position.set(chestAt.x, 0.35, chestAt.z);
+    chest.rotation.y = rot;
+    chest.material = photoMat(this.scene, "brown_planks_05");
+    this.register(chest, "world", true, true);
+    const band = MeshBuilder.CreateBox(`wchestBand_${clan}`, { width: 1.34, height: 0.12, depth: 0.84 }, this.scene);
+    band.position.set(chestAt.x, 0.5, chestAt.z);
+    band.rotation.y = rot;
+    band.material = flatMat(this.scene, info.color);
+    this.register(band, null, false);
+    const lidPivot = new TransformNode(`wchestPivot_${clan}`, this.scene);
+    lidPivot.position.set(chestAt.x, 0.7, chestAt.z);
+    lidPivot.rotation.y = rot;
+    const lid = MeshBuilder.CreateBox(`wchestLid_${clan}`, { width: 1.3, height: 0.18, depth: 0.8 }, this.scene);
+    lid.setPivotPoint(new Vector3(0, -0.09, -0.4));
+    lid.parent = lidPivot;
+    lid.position.set(0, 0.09, 0);
+    lid.material = photoMat(this.scene, "brown_planks_05");
+    lid.isPickable = false;
+    this.weaponChests.push({ pos: chestAt, clan, lid, open: false });
+    this.obstacles.push({ x0: cx - 11, z0: cz - 11, x1: cx + 11, z1: cz + 11 });
+    const spawns = [-3, -1, 1, 3].flatMap((sd) => [center.add(fwd.scale(6.5)).add(right.scale(sd * 1.2)), center.add(fwd.scale(11)).add(right.scale(sd * 1.5))]);
+    return { clan, center, spawns, facing: rot, flagPoint: center.clone(), flag };
   }
 
   // ---------- Уровень 5: гонки ----------

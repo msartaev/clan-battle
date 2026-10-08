@@ -224,6 +224,8 @@ export class Game {
   private ghost: Mesh | null = null;
   fences: Fence[] = [];
   private leaves: FallingLeaves | null = null;
+  /** Уровень 6: бот «бежит к сундуку» и до этого времени без оружия */
+  private botsArmedAt = 0;
   /** Уровень 5: гонка */
   race: Race | null = null;
   /** За рулём какой машины (или null) */
@@ -339,7 +341,12 @@ export class Game {
     // Команды 5 на 5: сначала враги (botCount), потом союзники — на одного меньше, ведь игрок тоже в команде
     const enemy = enemyClan(opts.clan);
     const lvl = opts.level ?? 1;
-    if (lvl === 5) {
+    if (lvl === 6) {
+      // Ферма: дуэль — ты против одного бойца другого клана; он идёт угонять твой трактор
+      const b = new Bot(scene, enemy, "clanWeapon");
+      b.attacker = true;
+      this.bots.push(b);
+    } else if (lvl === 5) {
       // Гонки: соперники — машины (race.ts), людей-ботов нет
     } else if (lvl === 4) {
       // Снег: трое соперников, у каждого своё — клановое оружие или рогатка
@@ -378,7 +385,7 @@ export class Game {
       this.bots.push(new Bot(scene, opts.clan, BOT_WEAPONS[(i + 1) % BOT_WEAPONS.length], true));
     }
     // В каждой команде двое штурмовиков: в свободное время идут за вражеским флагом
-    for (const c of ["dragons", "snakes"] as const) {
+    for (const c of lvl === 6 ? [] : (["dragons", "snakes"] as const)) {
       this.bots.filter((b) => b.clan === c).slice(1, 3).forEach((b) => (b.attacker = true));
     }
     const p = this.player;
@@ -1095,6 +1102,30 @@ export class Game {
     }
   }
 
+  // ---------------- Сундук с оружием (уровень 6) ----------------
+
+  private nearWeaponChest(): (typeof this.world.weaponChests)[number] | null {
+    const p = this.player.position;
+    for (const c of this.world.weaponChests) {
+      if (c.open || c.clan !== this.player.clan) continue;
+      if ((c.pos.x - p.x) ** 2 + (c.pos.z - p.z) ** 2 < 2.6 * 2.6) return c;
+    }
+    return null;
+  }
+
+  /** Открыть сундук: внутри клановое оружие, рогатка и сильный пистолет */
+  private openWeaponChest(c: (typeof this.world.weaponChests)[number]): void {
+    c.open = true;
+    (c.lid.parent as TransformNode).rotation.x = 0;
+    c.lid.rotation.x = -1.9;
+    const p = this.player;
+    for (const w of ["clanWeapon", "slingshot", "strongPistol"] as WeaponId[]) p.owned.add(w);
+    p.selectWeapon(WEAPON_ORDER.indexOf("clanWeapon"));
+    p.ammo = RULES.maxAmmo;
+    this.sfx.pickup();
+    this.hud.message("Сундук открыт: клановое оружие, рогатка и сильный пистолет!", 2.2, "#ffe14a");
+  }
+
   // ---------------- Машины ----------------
 
   private nearestCar(): (typeof this.world.cars)[number] | null {
@@ -1113,12 +1144,23 @@ export class Game {
 
   private updateCarHint(): void {
     const trader = this.nearTrader();
-    const near = !this.race && (trader || !!this.driving || !!this.nearestCar());
+    const chest = this.nearWeaponChest();
+    const near = !this.race && (!!chest || trader || !!this.driving || !!this.nearestCar());
     document.body.classList.toggle("near-car", near && this.state === "playing");
     const hint = document.getElementById("car-hint");
-    if (hint) hint.textContent = trader ? (this.shopOpen ? "" : "E — торговать") : this.driving ? "E — выйти из машины" : "E — сесть в машину";
+    const veh = this.world.level === 6 ? "трактор" : "машину";
+    if (hint)
+      hint.textContent = chest
+        ? "E — открыть сундук с оружием"
+        : trader
+        ? this.shopOpen
+          ? ""
+          : "E — торговать"
+        : this.driving
+        ? `E — выйти`
+        : `E — сесть в ${veh}`;
     const btn = document.getElementById("btn-car");
-    if (btn) btn.textContent = trader ? "Торговец" : "Машина";
+    if (btn) btn.textContent = chest ? "Сундук" : trader ? "Торговец" : this.world.level === 6 ? "Трактор" : "Машина";
   }
 
   private toggleCar(): void {
@@ -1560,7 +1602,7 @@ export class Game {
   private spawnAnimals(): void {
     const near = (x: number, z: number) => this.world.randomWalkPoint(this.rng, new Vector3(x, 0, z), 6);
     const place: [Animal["kind"], number, number][] =
-      this.world.level === 3 || this.world.level === 5
+      this.world.level === 3 || this.world.level >= 5
         ? []
         : this.world.level === 2
         ? [
@@ -1655,7 +1697,13 @@ export class Game {
     this.player.owned.clear();
     // Снег: только клановое оружие и рогатка, без бомб
     // Гонки: «действуют все боеприпасы» — всё оружие сразу
-    const kit = this.ffa ? (["clanWeapon", "slingshot"] as WeaponId[]) : this.race ? WEAPON_ORDER.filter((w) => w !== "sword") : this.loadout.weapons;
+    const kit = this.ffa
+      ? (["clanWeapon", "slingshot"] as WeaponId[])
+      : this.race
+      ? WEAPON_ORDER.filter((w) => w !== "sword")
+      : this.world.level === 6
+      ? [] // Ферма: без оружия, пока не откроешь сундук
+      : this.loadout.weapons;
     for (const w of kit) this.player.owned.add(w);
     this.player.swordLevel = 1;
     this.player.humanoid.setSwordLevel(1);
@@ -1664,6 +1712,13 @@ export class Game {
     const lb = this.ffa ? [] : this.loadout.bombs;
     this.bombs = { weak: lb.includes("weak") ? 1 : 0, strong: 0, boom: lb.includes("boom") ? 1 : 0, frost: lb.includes("frost") ? 1 : 0 };
     if (this.race) this.bombs = { weak: 2, strong: 1, boom: 3, frost: 2 };
+    if (this.world.level === 6) this.bombs = { weak: 0, strong: 0, boom: 0, frost: 0 };
+    for (const c of this.world.weaponChests) {
+      c.open = false;
+      (c.lid.parent as TransformNode).rotation.x = 0;
+      c.lid.rotation.x = 0;
+    }
+    this.botsArmedAt = this.world.level === 6 ? 9 : 0;
     this.playerFrozenUntil = -1;
     this.res = { wood: 0, leather: 0 };
     for (const h of this.hides) h.mesh.dispose();
@@ -1853,6 +1908,11 @@ export class Game {
         input.use = false;
         input.bomb = null;
       }
+      const wchest = this.nearWeaponChest();
+      if (input.use && wchest) {
+        this.openWeaponChest(wchest);
+        input.use = false;
+      }
       if (input.use && (this.shopOpen || this.nearTrader())) {
         this.toggleShop();
         input.use = false;
@@ -1873,6 +1933,8 @@ export class Game {
         if (input.fire && !this.prevFire) this.hud.message("Из машины не стреляют — выйди (E)", 1.2, "#ffb347");
       } else if (this.building) {
         if (input.fire && !this.prevFire) this.placeBuild();
+      } else if (!p.owned.size) {
+        if (input.fire && !this.prevFire) this.hud.message("Ты без оружия — открой сундук у своей базы (E)", 1.6, "#ffb347");
       } else if (p.weapon === "sword") this.updateMelee(input.fire);
       else if (input.fire) this.tryShoot(!this.prevFire);
       this.prevFire = input.fire;
@@ -1975,11 +2037,12 @@ export class Game {
     }
     const mine = this.player.clan;
     const own = this.capture[mine];
-    if (own.by) return { text: "Твой флаг захватывают!", t: own.t, color: "#ff5a4a" };
+    const tr = this.world.level === 6;
+    if (own.by) return { text: tr ? "Твой трактор угоняют!" : "Твой флаг захватывают!", t: own.t, color: "#ff5a4a" };
     const enemy = this.capture[enemyClan(mine)];
     if (enemy.by) {
       const me = enemy.by === this.playerTarget;
-      return { text: me ? "Захватываешь флаг — держись!" : "Наши захватывают флаг!", t: enemy.t, color: "#ffd23a" };
+      return { text: tr ? "Угоняешь трактор — держись!" : me ? "Захватываешь флаг — держись!" : "Наши захватывают флаг!", t: enemy.t, color: "#ffd23a" };
     }
     return null;
   }
@@ -1993,7 +2056,8 @@ export class Game {
   }
 
   private updateViewmodelWeapon(): void {
-    for (const [k, g] of this.vmGuns) g.setEnabled(k === this.player.weapon);
+    for (const [k, g] of this.vmGuns) g.setEnabled(k === this.player.weapon && this.player.owned.has(k));
+    this.player.humanoid.setArmed(this.player.owned.size > 0);
   }
 
   private canStand(): boolean {
@@ -2302,7 +2366,7 @@ export class Game {
       if (cap.by) {
         cap.t += dt / RULES.flagCaptureSec;
         if (cap.t >= 1) {
-          this.endMatch(cap.by.clan!, `Флаг клана ${CLANS[owner].name} захвачен!`);
+          this.endMatch(cap.by.clan!, this.world.level === 6 ? `Трактор клана ${CLANS[owner].name} угнан!` : `Флаг клана ${CLANS[owner].name} захвачен!`);
           return;
         }
       }
@@ -2325,6 +2389,7 @@ export class Game {
       throwBomb: (b, kind, t) => this.botThrow(b, kind, t),
       ground: (x, z) => this.world.heightAt(x, z),
       melee: (b, t) => {
+        if (this.now < this.botsArmedAt) return;
         const dmg = b.guardHome ? 15 : 10;
         this.sfx.swing(0.6);
         if (t.animal) t.animal.takeDamage(dmg, this.preyOf(b), this.now);
@@ -2428,6 +2493,7 @@ export class Game {
   }
 
   private botShoot(b: Bot, t: Target): void {
+    if (this.now < this.botsArmedAt) return;
     const p = this.player;
     const w = WEAPONS[b.weapon];
     const origin = b.humanoid.getMuzzlePosition();

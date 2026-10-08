@@ -309,7 +309,15 @@ export class Humanoid {
 
   setWeapon(id: WeaponId): void {
     this.weapon = id;
-    for (const [k, g] of this.guns) g.setEnabled(k === id);
+    for (const [k, g] of this.guns) g.setEnabled(this.armed && k === id);
+  }
+
+  /** Без оружия (уровень 6, пока не открыт сундук): в руках пусто */
+  private armed = true;
+  setArmed(v: boolean): void {
+    if (v === this.armed) return;
+    this.armed = v;
+    this.setWeapon(this.weapon);
   }
 
   setVisible(v: boolean): void {

@@ -1062,6 +1062,56 @@ const browser = await chromium.launch({
   await ctx.close();
 }
 
+// ---------- Уровень 6: ферма, дуэль за трактор ----------
+{
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  const page = await ctx.newPage();
+  watch(page, "level6");
+  await page.goto(URL + "?test&level=6", { waitUntil: "load" });
+  await page.click("#play");
+  await page.waitForFunction(() => !!window.__game, null, { timeout: 180000 });
+  const l6 = await page.evaluate(async () => {
+    const g = window.__game;
+    const p = g.player;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    const owned0 = p.owned.size;
+    const bots = g.bots.length;
+    const enemyClan = g.bots[0].clan !== p.clan;
+    const tractors = g.world.cars.length;
+    // Сундук у своей базы
+    const c = g.world.weaponChests.find((x) => x.clan === p.clan);
+    p.collider.position.set(c.pos.x + 1.5, 0, c.pos.z);
+    await frames(2);
+    g.input.use = true;
+    await frames(3);
+    const kit = [...p.owned].sort().join(",");
+    // Угон вражеского трактора: стоим в зоне, пока не уведём
+    let result = null;
+    const orig = g.onGameOver;
+    g.onGameOver = (r) => (result = r);
+    p.invulnerableUntil = g.now + 999;
+    const enemyBase = g.world.bases[g.bots[0].clan];
+    const bot = g.bots[0];
+    bot.update = () => {};
+    bot.collider.position.set(0, 0, 0);
+    for (let i = 0; i < 120 && !result; i++) {
+      p.collider.position.set(enemyBase.flagPoint.x + 3.5, 0, enemyBase.flagPoint.z);
+      await frames(5);
+    }
+    delete bot.update;
+    g.onGameOver = orig;
+    return { owned0, bots, enemyClan, tractors, kit, won: result?.won, reason: result?.reason };
+  });
+  console.log("level 6:", l6);
+  if (l6.owned0 !== 0 || l6.bots !== 1 || !l6.enemyClan || l6.tractors < 4 || l6.kit !== "clanWeapon,slingshot,strongPistol" || !l6.won || !/Трактор/.test(l6.reason ?? ""))
+    errors.push("[level6] ферма работает не так");
+  await page.screenshot({ path: path.join(shots, "12-level6-farm.png") });
+  await ctx.close();
+}
+
 await browser.close();
 console.log("\nconsole/page errors:", errors.length ? errors : "none");
 process.exit(errors.length ? 1 : 0);

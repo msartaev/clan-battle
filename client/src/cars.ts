@@ -235,3 +235,75 @@ export function buildCarMesh(scene: Scene, name: string, kind: CarKind, color: s
   merged.name = name;
   return merged;
 }
+
+/**
+ * Трактор (уровень 6): капот и кабина со стёклами, огромные задние колёса и маленькие передние,
+ * выхлопная труба. Как и машины, вытянут вдоль x (+ вперёд).
+ */
+export function buildTractorMesh(scene: Scene, name: string, color: string): Mesh {
+  const paintMat = paint(scene, color);
+  const dark = mat(scene, "rubber", () => {
+    const m = new StandardMaterial("carRubber", scene);
+    m.diffuseColor = new Color3(0.06, 0.06, 0.06);
+    m.specularColor = new Color3(0.05, 0.05, 0.05);
+    return m;
+  });
+  const glass = mat(scene, "glass", () => {
+    const m = new StandardMaterial("carGlass", scene);
+    m.diffuseColor = new Color3(0.08, 0.11, 0.14);
+    m.specularColor = new Color3(0.9, 0.9, 0.9);
+    m.specularPower = 96;
+    return m;
+  });
+  const rimMat = mat(scene, "tractorRim", () => {
+    const m = new StandardMaterial("tractorRim", scene);
+    m.diffuseColor = new Color3(0.92, 0.75, 0.12);
+    m.specularColor = new Color3(0.2, 0.2, 0.2);
+    return m;
+  });
+  const parts: Mesh[] = [];
+  const box = (w: number, h: number, d: number, x: number, y: number, z: number, m: StandardMaterial) => {
+    const b = MeshBuilder.CreateBox("tpart", { width: w, height: h, depth: d }, scene);
+    b.position.set(x, y, z);
+    b.material = m;
+    parts.push(b);
+    return b;
+  };
+  // Рама и капот
+  box(3.2, 0.35, 0.9, 0.2, 0.75, 0, dark);
+  box(1.9, 0.85, 1.0, 0.95, 1.3, 0, paintMat);
+  box(0.12, 0.6, 0.9, 1.92, 1.2, 0, dark); // решётка радиатора
+  // Кабина: стойки и стёкла
+  box(1.3, 0.25, 1.6, -0.75, 1.45, 0, paintMat);
+  box(1.4, 0.12, 1.7, -0.75, 2.75, 0, paintMat); // крыша
+  for (const [x, z] of [[-0.12, -0.78], [-0.12, 0.78], [-1.38, -0.78], [-1.38, 0.78]]) box(0.08, 1.2, 0.08, x, 2.1, z, dark);
+  box(0.04, 1.1, 1.5, -0.1, 2.1, 0, glass);
+  box(1.2, 1.1, 0.04, -0.75, 2.1, 0.78, glass);
+  box(1.2, 1.1, 0.04, -0.75, 2.1, -0.78, glass);
+  box(0.04, 1.1, 1.5, -1.4, 2.1, 0, glass);
+  // Выхлопная труба
+  const pipe = MeshBuilder.CreateCylinder("tpipe", { diameter: 0.12, height: 1.2, tessellation: 8 }, scene);
+  pipe.position.set(1.4, 2.2, 0.35);
+  pipe.material = dark;
+  parts.push(pipe);
+  // Колёса: большие задние, маленькие передние
+  for (const [x, r, w] of [[-0.75, 0.85, 0.55], [1.35, 0.48, 0.35]] as const) {
+    for (const s of [-1, 1]) {
+      const tire = MeshBuilder.CreateCylinder("ttire", { diameter: r * 2, height: w, tessellation: 20 }, scene);
+      tire.rotation.x = Math.PI / 2;
+      tire.position.set(x, r, s * (0.62 + w / 2));
+      tire.material = dark;
+      parts.push(tire);
+      const rim = MeshBuilder.CreateCylinder("trim", { diameter: r * 1.1, height: w + 0.04, tessellation: 14 }, scene);
+      rim.rotation.x = Math.PI / 2;
+      rim.position.set(x, r, s * (0.62 + w / 2));
+      rim.material = rimMat;
+      parts.push(rim);
+    }
+  }
+  // Крылья над задними колёсами
+  for (const s of [-1, 1]) box(1.5, 0.08, 0.6, -0.75, 1.75, s * 0.92, paintMat);
+  const merged = Mesh.MergeMeshes(parts, true, true, undefined, false, true)!;
+  merged.name = name;
+  return merged;
+}

@@ -50,7 +50,7 @@ selectClan(clan);
 
 // ----- Уровни: 1–4 открыты сразу; следующие — когда выиграны все четыре (идея Даниэля) -----
 const FREE_LEVELS = 4;
-const MAX_LEVEL = 5;
+const MAX_LEVEL = 6;
 let won = new Set<number>();
 try {
   won = new Set((localStorage.getItem("cb_won") ?? "").split(",").map(Number).filter((n) => n >= 1 && n <= MAX_LEVEL));
@@ -62,7 +62,9 @@ try {
 }
 let level = Math.min(MAX_LEVEL, Math.max(1, Number(params.get("level")) || 1));
 // ?level=N открывает уровень сразу — для проверки и показа
-const isOpen = (n: number) => n <= FREE_LEVELS || n === level || [1, 2, 3, 4].every((k) => won.has(k));
+// 5-й — когда пройдены все четыре; дальше каждый следующий — победой на предыдущем
+const isOpen = (n: number) =>
+  n <= FREE_LEVELS || n === level || (n === FREE_LEVELS + 1 ? [1, 2, 3, 4].every((k) => won.has(k)) : won.has(n - 1));
 const levelButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("#levels button"));
 function renderLevels(): void {
   levelButtons.forEach((b) => {
@@ -97,6 +99,7 @@ function markWon(): string {
     /* не сохранилось */
   }
   renderLevels();
+  if (level >= FREE_LEVELS + 1 && level < MAX_LEVEL) return ` Открыт уровень ${level + 1}!`;
   const left = [1, 2, 3, 4].filter((k) => !won.has(k));
   if (!before && !left.length) return " Пройдены все четыре уровня! Открыт уровень 5 — гонки!";
   if (left.length) return ` Осталось пройти: ${left.join(", ")}.`;
