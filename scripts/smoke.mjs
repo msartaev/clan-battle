@@ -627,16 +627,23 @@ const browser = await chromium.launch({
     };
     p.invulnerableUntil = g.now + 999;
     g.bots.forEach((b) => b.spawn(new V(-50, 0, 60), 0));
-    // Рубим дерево
-    const tr = g.world.treeSpots[0];
-    p.collider.position.set(tr.x, 0, tr.z - 1.6);
+    // Рубим дерево: каждый удар +1, после пятого оно падает (от игрока) и даёт ещё 3
+    const tr = g.world.treeList.find((t) => t.fallT === 0);
+    p.collider.position.set(tr.pos.x, tr.pos.y, tr.pos.z - 1.6);
     p.yaw = 0;
     p.selectWeapon(4);
     g["strike"](1);
     const wood = g.res.wood;
+    for (let i = 0; i < 4; i++) g["strike"](1);
+    const woodFelled = g.res.wood;
+    await frames(60);
+    tr.mesh.computeWorldMatrix(true);
+    const wm = tr.mesh.getWorldMatrix().m;
+    const top = { x: wm[4] * 5 + wm[12], y: wm[5] * 5 + wm[13], z: wm[6] * 5 + wm[14] };
+    const fell = tr.fallT > 1.4 && !tr.trunk.isEnabled() && top.z > tr.pos.z + 2 && top.y < tr.pos.y + 2;
     // Торговец приходит
-    g.res.wood = 20;
-    g.res.leather = 5;
+    g.res.wood = 60;
+    g.res.leather = 15;
     g.nextTraderAt = g.now;
     await frames(2);
     const spot = g["trader"].root.position;
@@ -648,19 +655,58 @@ const browser = await chromium.launch({
     const open = g["shopOpen"];
     g["buy"]("guard");
     g["buy"]("spikes");
+    g["buy"]("fenceWeak");
+    g["buy"]("fenceStrong");
+    const inv = { ...g.inv };
+    const left = { ...g.res };
+    g["closeShop"]();
+    // Ставим охранника руками в чистом поле
+    const gx = spot.x + 1, gz = spot.z;
+    p.collider.position.set(gx, 0, gz);
+    p.yaw = 0;
+    g.input.build = true;
+    await frames(2);
+    const buildingGuard = g.building;
+    g.input.build = true; // шипы → охранник: по порядку инвентаря
+    await frames(2);
+    const placingWhat = g.building;
+    g["placeBuild"]();
     const guard = g.bots.find((b) => b.guardHome && b.clan === p.clan && b.alive);
+    const guardSpotOk = !!guard && Math.abs(guard.position.x - gx) < 1 && Math.abs(guard.position.z - (gz + 2)) < 1;
     // Враг подходит к охраннику
     const enemy = g.bots.find((b) => b.clan !== p.clan && !b.guardHome);
     enemy.spawn(guard.position.add(new V(1.2, 0, 0)), 0);
     enemy.update = () => {};
     const eh0 = enemy.hp;
-    await frames(40);
+    // Время игры идёт медленно (кадр ограничен), охраннику нужно заметить врага и подбежать
+    for (let i = 0; i < 20 && enemy.hp >= eh0; i++) await frames(10);
+    const guardHurt = eh0 - enemy.hp;
+    // Электрозабор: ставим перед собой, враг у забора получает удар током, пули его ломают
+    p.collider.position.set(-30, 0, -20);
+    p.yaw = 0;
+    g.setBuild("fenceStrong");
+    await frames(2);
+    g["placeBuild"]();
+    const fence = g.fences[g.fences.length - 1];
+    enemy.hp = 100;
+    enemy.spawn(new V(fence.pos.x + 0.5, fence.pos.y, fence.pos.z + 0.5), 0);
+    await frames(10);
+    const zapped = 100 - enemy.hp;
     delete enemy.update;
-    g["closeShop"]();
-    return { wood, near, open, guard: !!guard, guardHp: guard?.maxHp, spikes: g["spikes"].length, enemyHurt: eh0 - enemy.hp, left: { ...g.res } };
+    const fhp = fence.hp;
+    g["hitFenceFrom"](fence.box, 3);
+    const fenceDamaged = fhp - fence.hp;
+    g["placeSpikes"](p.clan, new V(0, 0, 0));
+    g.setBuild(null);
+    return {
+      wood, woodFelled, fell, near, open, inv, left, buildingGuard, placingWhat, guardSpotOk,
+      guardHp: guard?.maxHp, enemyHurt: guardHurt, zapped, fenceDamaged, fences: g.fences.length,
+    };
   });
   console.log("trader test:", traderTest);
-  if (traderTest.wood !== 1 || !traderTest.near || !traderTest.open || !traderTest.guard || traderTest.guardHp !== 200 || traderTest.spikes !== 1 || traderTest.enemyHurt <= 0)
+  const tt = traderTest;
+  if (tt.wood !== 1 || tt.woodFelled !== 8 || !tt.fell || !tt.near || !tt.open || tt.inv.guard !== 1 || tt.inv.spikes !== 1 || tt.inv.fenceWeak !== 1 || tt.inv.fenceStrong !== 1 ||
+      tt.buildingGuard !== "spikes" || tt.placingWhat !== "guard" || !tt.guardSpotOk || tt.guardHp !== 200 || tt.zapped < 20 || tt.zapped >= 60 || tt.enemyHurt <= 0 || tt.fenceDamaged !== 3 || tt.fences !== 1)
     errors.push("[desktop] trader test: торговец, охранник или шипы работают не так");
   await page.evaluate(() => window.__game.resetMatch());
 

@@ -10,6 +10,7 @@ import {
   FreeCamera,
   HemisphericLight,
   InstancedMesh,
+  Matrix,
   Mesh,
   MeshBuilder,
   Ray,
@@ -34,6 +35,7 @@ import {
 } from "@clan-battle/shared";
 import { Animal, type Prey } from "./animals";
 import { Humanoid } from "./humanoid";
+import { FallingLeaves } from "./leaves";
 import { Birds } from "./birds";
 import { Drone, type DroneTarget } from "./drones";
 import { Bot, type BotContext, type Target } from "./bot";
@@ -96,6 +98,25 @@ const isWorldOrSoft = (m: AbstractMesh) => m.metadata?.kind === "world" || m.met
 
 /** Обычный угол обзора камеры, рад */
 const BASE_FOV = 1.05;
+
+type InvItem = "spikes" | "guard" | "fenceWeak" | "fenceStrong";
+type ShopItem = InvItem | "weak";
+interface Fence {
+  root: Mesh;
+  box: Mesh;
+  pos: Vector3;
+  yaw: number;
+  hp: number;
+  zap: number;
+  clan: ClanId;
+  hitAt: Map<object, number>;
+  kind: "fenceWeak" | "fenceStrong";
+}
+/** Электрозаборы (Даниэль): слабый бьёт током на 10, сильный — на 20 */
+const FENCE = {
+  fenceWeak: { name: "Слабый электрозабор", icon: "⚡", zap: 10, hp: 10, wood: 6, leather: 1 },
+  fenceStrong: { name: "Сильный электрозабор", icon: "⚡⚡", zap: 20, hp: 20, wood: 20, leather: 4 },
+} as const;
 
 export class Game {
   readonly engine: Engine;
@@ -195,6 +216,13 @@ export class Game {
   /** Сколько охранников клан уже купил (цена растёт) */
   private guardsBought: Record<ClanId, number> = { dragons: 0, snakes: 0 };
   private spikes: { mesh: Mesh; pos: Vector3; uses: number; clan: ClanId; hitAt: Map<object, number> }[] = [];
+  /** Инвентарь базы: купленное у торговца ставится руками куда хочешь (идея Даниэля) */
+  inv: Record<InvItem, number> = { spikes: 0, guard: 0, fenceWeak: 0, fenceStrong: 0 };
+  /** Что сейчас ставим (призрак перед игроком) */
+  building: InvItem | null = null;
+  private ghost: Mesh | null = null;
+  fences: Fence[] = [];
+  private leaves: FallingLeaves | null = null;
   /** За рулём какой машины (или null) */
   driving: { mesh: Mesh; yaw: number; home: Vector3; homeYaw: number; speed?: number } | null = null;
   private carSpeed = 0;
@@ -290,13 +318,13 @@ export class Game {
   static async create(canvas: HTMLCanvasElement, input: Input, opts: GameOptions): Promise<Game> {
     const g = new Game(canvas, input, opts);
     await loadModels(g.scene);
-    g.build();
+    g.buildScene();
     return g;
   }
 
   private sun!: DirectionalLight;
 
-  private build(): void {
+  private buildScene(): void {
     const { scene, opts, sun } = this;
     // На телефонах и в режиме ?low мелких деталей (трава, цветы) втрое меньше
     this.world = new World(scene, opts.detail, opts.level ?? 1);
@@ -348,6 +376,7 @@ export class Game {
     this.spawnAnimals();
     this.birds = new Birds(this.scene, this.world.level === 4 ? 0 : opts.detail < 1 ? 6 : 12);
     if (this.world.level === 4) this.makeSnowfall(opts.detail);
+    else if (!opts.lowFx || opts.detail >= 1) this.leaves = new FallingLeaves(this.scene);
     if (this.world.level === 2) {
       const ground = (x: number, z: number) => this.world.heightAt(x, z);
       for (let i = 0; i < (opts.detail < 0.3 ? 2 : 3); i++) this.drones.push(new Drone(this.scene, { x0: 15, z0: 15, x1: 95, z1: 95 }, ground));
@@ -714,7 +743,7 @@ export class Game {
     if (!el.dataset.bound) {
       el.dataset.bound = "1";
       el.querySelectorAll<HTMLButtonElement>("button[data-buy]").forEach((b) =>
-        b.addEventListener("click", () => this.buy(b.dataset.buy as "guard" | "spikes" | "weak")),
+        b.addEventListener("click", () => this.buy(b.dataset.buy as ShopItem)),
       );
       el.querySelector(".shop-close")!.addEventListener("click", () => this.closeShop());
     }
@@ -738,26 +767,40 @@ export class Game {
       b.textContent = text;
       b.disabled = !ok;
     };
-    set("guard", `🛡 Охранник (${guards}/10) — ${gp.wood} 🪵 + ${gp.leather} 🟫`, r.wood >= gp.wood && r.leather >= gp.leather && guards < 10);
-    set("spikes", "⚠️ Шипы у входа — 3 🪵", r.wood >= 3);
+    const have = (k: InvItem) => (this.inv[k] ? ` · есть ${this.inv[k]}` : "");
+    set("guard", `🛡 Охранник (${guards + this.inv.guard}/10) — ${gp.wood} 🪵 + ${gp.leather} 🟫${have("guard")}`, r.wood >= gp.wood && r.leather >= gp.leather && guards + this.inv.guard < 10);
+    set("spikes", `⚠️ Шипы — 3 🪵${have("spikes")}`, r.wood >= 3);
+    for (const k of ["fenceWeak", "fenceStrong"] as const) {
+      const f = FENCE[k];
+      set(k, `${f.icon} ${f.name} (бьёт на ${f.zap}) — ${f.wood} 🪵 + ${f.leather} 🟫${have(k)}`, r.wood >= f.wood && r.leather >= f.leather);
+    }
     set("weak", "🟢 Лечебная бомба — 2 🪵 + 1 🟫", r.wood >= 2 && r.leather >= 1 && this.bombs.weak < RULES.maxBombs);
     el.querySelector(".shop-left")!.textContent = String(Math.max(0, Math.ceil(this.traderUntil - this.now)));
   }
 
-  private buy(what: "guard" | "spikes" | "weak"): void {
+  private buy(what: ShopItem): void {
     const r = this.res;
     if (what === "guard") {
       const gp = this.guardPrice(this.player.clan);
-      if (r.wood < gp.wood || r.leather < gp.leather) return;
-      if (!this.hireGuard(this.player.clan)) return;
+      const guards = this.bots.filter((b) => b.guardHome && b.clan === this.player.clan && b.alive).length;
+      if (r.wood < gp.wood || r.leather < gp.leather || guards + this.inv.guard >= 10) return;
       r.wood -= gp.wood;
       r.leather -= gp.leather;
-      this.hud.message("Охранник нанят — стережёт бункер", 1.6, "#7dffb0");
+      this.guardsBought[this.player.clan]++;
+      this.inv.guard++;
+      this.hud.message("Охранник в инвентаре — T, чтобы поставить", 1.8, "#7dffb0");
     } else if (what === "spikes") {
       if (r.wood < 3) return;
       r.wood -= 3;
-      this.placeSpikes(this.player.clan);
-      this.hud.message("Шипы поставлены у входа в бункер", 1.6, "#7dffb0");
+      this.inv.spikes++;
+      this.hud.message("Шипы в инвентаре — T, чтобы поставить", 1.8, "#7dffb0");
+    } else if (what === "fenceWeak" || what === "fenceStrong") {
+      const f = FENCE[what];
+      if (r.wood < f.wood || r.leather < f.leather) return;
+      r.wood -= f.wood;
+      r.leather -= f.leather;
+      this.inv[what]++;
+      this.hud.message(`${f.name} в инвентаре — T, чтобы поставить`, 1.8, "#7dffb0");
     } else {
       if (r.wood < 2 || r.leather < 1 || this.bombs.weak >= RULES.maxBombs) return;
       r.wood -= 2;
@@ -769,11 +812,11 @@ export class Game {
   }
 
   /** Нанять охранника клану: появляется у бункера. Не больше 10 живых на клан */
-  private hireGuard(clan: ClanId): boolean {
+  private hireGuard(clan: ClanId, at?: Vector3): boolean {
     const alive = this.bots.filter((b) => b.guardHome && b.clan === clan && b.alive).length;
     if (alive >= 10) return false;
     const base = this.world.bases[clan];
-    const home = base.flagPoint.clone();
+    const home = at ? at.clone() : base.flagPoint.clone();
     // Переиспользуем выбывшего охранника, если есть (без лишних сеток)
     let g = this.bots.find((b) => b.guardHome && b.clan === clan && !b.alive && b.lives <= 0);
     if (!g) {
@@ -781,17 +824,15 @@ export class Game {
       this.bots.push(g);
     }
     g.lives = 1;
+    g.guardHome = home;
     const a = Math.random() * Math.PI * 2;
-    g.spawn(home.add(new Vector3(Math.sin(a) * 6, 0, Math.cos(a) * 6)), a);
-    this.guardsBought[clan]++;
+    g.spawn(at ? home : home.add(new Vector3(Math.sin(a) * 6, 0, Math.cos(a) * 6)), a);
+    if (!at) this.guardsBought[clan]++;
     return true;
   }
 
   /** Шипы перед входом бункера: ранят врагов и зверей, 4 срабатывания */
-  private placeSpikes(clan: ClanId): void {
-    const base = this.world.bases[clan];
-    const door = base.spawns[0].add(base.spawns[1]).scale(0.5);
-    const at = door.add(new Vector3((Math.random() - 0.5) * 6, 0, (Math.random() - 0.5) * 3));
+  private spikesMesh(): Mesh {
     const parts: Mesh[] = [];
     for (let i = 0; i < 9; i++) {
       const c = MeshBuilder.CreateCylinder("spike", { height: 0.35, diameterTop: 0, diameterBottom: 0.12, tessellation: 4 }, this.scene);
@@ -802,8 +843,13 @@ export class Game {
     parts.push(plate);
     const m = Mesh.MergeMeshes(parts, true)!;
     m.material = flatMat(this.scene, "#6b6f75");
-    m.position.copyFrom(at);
     m.isPickable = false;
+    return m;
+  }
+
+  private placeSpikes(clan: ClanId, at: Vector3): void {
+    const m = this.spikesMesh();
+    m.position.copyFrom(at);
     this.spikes.push({ mesh: m, pos: at, uses: 4, clan, hitAt: new Map() });
   }
 
@@ -825,6 +871,201 @@ export class Game {
         sp.mesh.dispose();
         this.spikes.splice(i, 1);
       }
+    }
+  }
+
+  // ---------------- База: инвентарь, стройка, электрозаборы ----------------
+
+  private static readonly INV_ORDER: InvItem[] = ["spikes", "guard", "fenceWeak", "fenceStrong"];
+
+  /** T: следующий предмет из инвентаря (после последнего — выход из стройки) */
+  private cycleBuild(): void {
+    const own = Game.INV_ORDER.filter((k) => this.inv[k] > 0);
+    if (!own.length) {
+      this.setBuild(null);
+      this.hud.message("Инвентарь пуст — купи у торговца (шипы, охрана, заборы)", 1.8, "#ffb347");
+      return;
+    }
+    const i = this.building ? own.indexOf(this.building) : -1;
+    this.setBuild(i + 1 < own.length ? own[i + 1] : null);
+  }
+
+  setBuild(item: InvItem | null): void {
+    this.ghost?.dispose(false, true);
+    this.ghost = null;
+    this.building = item;
+    document.body.classList.toggle("building", !!item);
+    if (!item) return;
+    const g = item === "spikes" ? this.spikesMesh() : item === "guard" ? this.guardGhost() : this.fenceMesh(item === "fenceStrong");
+    const mat = new StandardMaterial("ghostMat", this.scene);
+    mat.diffuseColor = new Color3(0.3, 1, 0.5);
+    mat.emissiveColor = new Color3(0.1, 0.5, 0.2);
+    mat.alpha = 0.45;
+    for (const m of [g, ...g.getChildMeshes()]) {
+      m.material = mat;
+      m.isPickable = false;
+      m.checkCollisions = false;
+    }
+    this.ghost = g;
+    const name = item === "spikes" ? "Шипы" : item === "guard" ? "Охранник" : FENCE[item].name;
+    this.hud.message(`Ставим: ${name} (${this.inv[item]}). ${this.opts.touch ? "«Огонь» — поставить" : "Клик — поставить, T — дальше, X — отмена"}`, 2.2, "#7dffb0");
+  }
+
+  private guardGhost(): Mesh {
+    const m = MeshBuilder.CreateCapsule("guardGhost", { height: 1.8, radius: 0.35 }, this.scene);
+    m.bakeTransformIntoVertices(Matrix.Translation(0, 0.9, 0));
+    return m;
+  }
+
+  /** Куда встанет предмет: перед игроком, на земле */
+  private buildSpot(): { pos: Vector3; yaw: number } {
+    const p = this.player;
+    const d = this.building === "fenceWeak" || this.building === "fenceStrong" ? 2.6 : 2;
+    const x = p.position.x + Math.sin(p.yaw) * d;
+    const z = p.position.z + Math.cos(p.yaw) * d;
+    return { pos: new Vector3(x, this.world.floorAt(x, z, p.position.y + 1), z), yaw: p.yaw };
+  }
+
+  private updateBuild(input: Input): void {
+    if (input.build) this.cycleBuild();
+    if (input.buildCancel && this.building) this.setBuild(null);
+    input.build = input.buildCancel = false;
+    if (!this.building) return;
+    if (this.inv[this.building] <= 0) {
+      this.cycleBuild();
+      if (!this.building) return;
+    }
+    const s = this.buildSpot();
+    this.ghost!.position.copyFrom(s.pos);
+    this.ghost!.rotation.y = s.yaw;
+  }
+
+  private placeBuild(): void {
+    const item = this.building;
+    if (!item || this.inv[item] <= 0) return;
+    const { pos, yaw } = this.buildSpot();
+    const clan = this.player.clan;
+    if (item === "spikes") this.placeSpikes(clan, pos);
+    else if (item === "guard") {
+      if (!this.hireGuard(clan, pos)) {
+        this.hud.message("Охранников уже 10", 1.4, "#ffb347");
+        return;
+      }
+    } else this.addFence(pos, yaw, item === "fenceStrong", clan);
+    this.inv[item]--;
+    this.sfx.clang();
+    this.effects.impact(pos.add(new Vector3(0, 0.3, 0)), false);
+    if (this.inv[item] <= 0) this.cycleBuild();
+  }
+
+  /** Забор 3 м: столбы и провода под током. Слабый — деревянные столбы, сильный — стальные */
+  private fenceMesh(strong: boolean): Mesh {
+    const parts: Mesh[] = [];
+    for (const x of [-1.5, 0, 1.5]) {
+      const post = MeshBuilder.CreateBox("fpost", { width: strong ? 0.14 : 0.12, height: 1.7, depth: strong ? 0.14 : 0.12 }, this.scene);
+      post.position.set(x, 0.85, 0);
+      parts.push(post);
+    }
+    const root = Mesh.MergeMeshes(parts, true)!;
+    root.material = strong ? flatMat(this.scene, "#7d848c") : this.woodPostMat();
+    const wireMat = new StandardMaterial(strong ? "wireStrong" : "wireWeak", this.scene);
+    wireMat.emissiveColor = strong ? new Color3(1, 0.85, 0.2) : new Color3(0.35, 0.8, 1);
+    wireMat.disableLighting = true;
+    const n = strong ? 5 : 3;
+    for (let i = 0; i < n; i++) {
+      const w = MeshBuilder.CreateBox("fwire", { width: 3, height: 0.03, depth: 0.03 }, this.scene);
+      w.position.set(0, 0.3 + (i * 1.25) / (n - 1), 0);
+      w.material = wireMat;
+      w.parent = root;
+      w.isPickable = false;
+    }
+    root.isPickable = false;
+    return root;
+  }
+
+  private woodPostMat(): StandardMaterial {
+    return flatMat(this.scene, "#6b4a2b");
+  }
+
+  addFence(pos: Vector3, yaw: number, strong: boolean, clan: ClanId): Fence {
+    const kind = strong ? "fenceStrong" : "fenceWeak";
+    const root = this.fenceMesh(strong);
+    root.position.copyFrom(pos);
+    root.rotation.y = yaw;
+    // Невидимая стенка: в неё упираешься, и пули в неё попадают (забор можно сломать)
+    const box = MeshBuilder.CreateBox("fenceBox", { width: 3.1, height: 1.8, depth: 0.3 }, this.scene);
+    box.position.set(pos.x, pos.y + 0.9, pos.z);
+    box.rotation.y = yaw;
+    box.isVisible = false;
+    box.checkCollisions = true;
+    box.isPickable = true;
+    const f: Fence = { root, box, pos: pos.clone(), yaw, hp: FENCE[kind].hp, zap: FENCE[kind].zap, clan, hitAt: new Map(), kind };
+    box.metadata = { kind: "world", fence: f };
+    this.fences.push(f);
+    return f;
+  }
+
+  removeFence(f: Fence): void {
+    f.root.dispose(false, false);
+    f.box.dispose();
+    this.fences = this.fences.filter((x) => x !== f);
+  }
+
+  /** Урон забору (пули, меч, взрывы). Сломан — рассыпается */
+  private damageFence(f: Fence, n: number): void {
+    if (f.hp <= 0) return;
+    f.hp -= n;
+    this.effects.impact(f.pos.add(new Vector3(0, 1, 0)), false);
+    if (f.hp <= 0) {
+      const vol = clamp(1 - Vector3.Distance(f.pos, this.player.position) / 60, 0.1, 1);
+      this.sfx.boom(vol * 0.4);
+      this.effects.explosion(f.pos.add(new Vector3(0, 0.8, 0)), 1.2);
+      this.removeFence(f);
+      if (f.clan === this.player.clan) this.hud.message("Твой забор сломали!", 1.4, "#ffb347");
+    }
+  }
+
+  private hitFenceFrom(mesh: AbstractMesh | null | undefined, n = 1): void {
+    const f = mesh?.metadata?.fence as Fence | undefined;
+    if (f) this.damageFence(f, n);
+  }
+
+  /** Расстояние по земле от точки до линии забора */
+  private fenceDist(f: Fence, pos: Vector3): number {
+    const ux = Math.cos(f.yaw);
+    const uz = -Math.sin(f.yaw);
+    const dx = pos.x - f.pos.x;
+    const dz = pos.z - f.pos.z;
+    const along = clamp(dx * ux + dz * uz, -1.5, 1.5);
+    return Math.hypot(dx - ux * along, dz - uz * along);
+  }
+
+  /** Ток: кто из врагов коснулся забора — получает удар (раз в секунду) */
+  private updateFences(): void {
+    for (const f of [...this.fences]) {
+      const zap = (pos: Vector3, key: object, hurt: () => void) => {
+        if (this.fenceDist(f, pos) > 0.85 || Math.abs(pos.y - f.pos.y) > 2) return;
+        if ((f.hitAt.get(key) ?? -9) > this.now - 1) return;
+        f.hitAt.set(key, this.now);
+        hurt();
+        const vol = clamp(1 - Vector3.Distance(f.pos, this.player.position) / 40, 0.1, 1);
+        this.sfx.laser(vol);
+        this.effects.impact(pos.add(new Vector3(0, 1, 0)), true);
+      };
+      for (const b of this.bots) if (b.alive && b.clan !== f.clan) zap(b.position, b, () => this.damageBot(b, f.zap));
+      for (const a of this.animals) if (a.alive) zap(a.pos, a, () => a.takeDamage(f.zap, null, this.now));
+      if (this.player.clan !== f.clan && this.player.alive) zap(this.player.position, this.player, () => this.damagePlayer(f.zap));
+    }
+  }
+
+  // ---------------- Падающие деревья ----------------
+
+  private updateFallingTrees(dt: number): void {
+    for (const at of this.world.updateTrees(dt).landed) {
+      const vol = clamp(1 - Vector3.Distance(at, this.player.position) / 60, 0.1, 1);
+      this.sfx.boom(vol * 0.5);
+      this.effects.impact(at, false);
+      this.effects.impact(at.add(new Vector3(0.8, 0, 0.5)), false);
     }
   }
 
@@ -977,15 +1218,27 @@ export class Game {
     const hit = best as { d: number; bot?: Bot; beast?: Animal } | null;
     if (!hit) {
       // Никого рядом — может, это дерево? Удар мечом по стволу даёт дерево для торговца
-      for (const tr of this.world.treeSpots) {
-        const to = tr.subtract(p.position);
+      for (const fc of this.fences) {
+        const to = fc.pos.subtract(p.position);
+        if (fc.clan !== p.clan && this.fenceDist(fc, p.position) < 1.6 && Vector3.Dot(to, f) > 0) {
+          this.sfx.clang();
+          this.damageFence(fc, 1);
+          return;
+        }
+      }
+      for (const tr of this.world.treeList) {
+        if (tr.fallT > 0) continue;
+        const to = tr.pos.subtract(p.position);
         to.y = 0;
         const d = to.length();
         if (d < 2.4 && Vector3.Dot(to.scale(1 / Math.max(d, 0.01)), f) > 0.5) {
           this.res.wood++;
           this.sfx.chop();
-          this.effects.impact(tr.add(new Vector3(0, 1.2, 0)), false);
-          this.hud.message(`+1 🪵 (${this.res.wood})`, 0.8, "#ffe1a8");
+          this.effects.impact(tr.pos.add(new Vector3(0, 1.2, 0)), false);
+          if (this.world.chopTree(tr, Math.atan2(to.x, to.z))) {
+            this.res.wood += 3;
+            this.hud.message(`Дерево падает! +4 🪵 (${this.res.wood})`, 1.4, "#ffe1a8");
+          } else this.hud.message(`+1 🪵 (${this.res.wood}) · ещё ударов: ${tr.hp}`, 0.8, "#ffe1a8");
           return;
         }
       }
@@ -1187,6 +1440,7 @@ export class Game {
       if (dmg > 0) this.damagePlayer(dmg);
     }
     for (const w of this.world.windows) if (!w.broken && Vector3.Distance(w.center, at) < R) this.shatter(w);
+    for (const f of [...this.fences]) if (f.clan !== clan && Vector3.Distance(f.pos, at) < R) this.damageFence(f, 5);
     // Камера вздрагивает, если взрыв рядом
     if (vol > 0.6) this.vmKick = 1;
   }
@@ -1381,6 +1635,10 @@ export class Game {
     this.guardsBought = { dragons: 0, snakes: 0 };
     for (const sp of this.spikes) sp.mesh.dispose();
     this.spikes = [];
+    for (const fc of [...this.fences]) this.removeFence(fc);
+    this.inv = { spikes: 0, guard: 0, fenceWeak: 0, fenceStrong: 0 };
+    this.setBuild(null);
+    for (const t of this.world.treeList) if (t.fallT > 0) this.world.regrowTree(t);
     // Купленные охранники уходят: новый матч — с нуля
     for (const b of this.bots.filter((x) => x.guardHome)) {
       b.lives = 0;
@@ -1537,8 +1795,12 @@ export class Game {
       if (this.driving) this.updateCar(dt);
       else p.update(dt, input, this.now, () => this.canStand(), (x, z, y) => this.world.floorAt(x, z, y));
       this.updateCarHint();
+      if (this.driving && this.building) this.setBuild(null);
+      if (!this.driving) this.updateBuild(input);
       if (this.driving) {
         if (input.fire && !this.prevFire) this.hud.message("Из машины не стреляют — выйди (E)", 1.2, "#ffb347");
+      } else if (this.building) {
+        if (input.fire && !this.prevFire) this.placeBuild();
       } else if (p.weapon === "sword") this.updateMelee(input.fire);
       else if (input.fire) this.tryShoot(!this.prevFire);
       this.prevFire = input.fire;
@@ -1567,6 +1829,9 @@ export class Game {
     this.updateDrones(dt);
     this.updateTrader(dt);
     this.updateSpikes();
+    this.updateFences();
+    this.updateFallingTrees(dt);
+    this.leaves?.update(dt, this.camera.position, this.world.treeList);
     this.updateHides();
     this.updateDome(dt);
     this.updateSnow(dt);
@@ -1592,6 +1857,8 @@ export class Game {
       owned: [...p.owned],
       swordLevel: p.swordLevel,
       res: this.res,
+      inv: this.inv,
+      building: this.building,
       bombs: this.bombs,
       domeLeft: this.dome ? Math.max(0, this.dome.until - this.now) : 0,
       timeLeft: this.matchLeft,
@@ -1785,6 +2052,7 @@ export class Game {
         return;
       }
       if (glassHit && !beast && !target) this.shatter(glassHit);
+      if (!beast && !target && wHit?.hit) this.hitFenceFrom(wHit.pickedMesh);
       if (p.weapon === "sticky") {
         if (beast && beast.alive) this.stick(beast.pos, () => (beast.stuckUntil = this.now + STICKY.stuckSec), beast.info.radius + 0.3, beast.info.name);
         else if (target && target.alive) {
@@ -2072,6 +2340,7 @@ export class Game {
 
     const apply = () => {
       if (glassHit && !hit) this.shatter(glassHit);
+      if (!hit && wHit?.hit) this.hitFenceFrom(wHit.pickedMesh);
       if (hit && t.alive && beast) {
         beast.takeDamage(WEAPONS[b.weapon].damage, this.preyOf(b), this.now);
         this.effects.impact(end, true);

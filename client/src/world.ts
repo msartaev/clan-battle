@@ -52,6 +52,9 @@ export interface BaseInfo {
 }
 
 /** Половина стороны карты, м (уровень 1 — 64, уровень 2 — 100) */
+/** Сколько ударов мечом выдерживает дерево */
+export const TREE_HP = 5;
+
 export let MAP_HALF = 64;
 
 /**
@@ -75,6 +78,20 @@ const inRect = (r: { x0: number; x1: number; z0: number; z1: number }, x: number
   x > r.x0 - m && x < r.x1 + m && z > r.z0 - m && z < r.z1 + m;
 
 /** Стекло в окне: целое не пускает и останавливает пули, разбитое — можно залезть */
+export interface TreeInfo {
+  pos: Vector3;
+  mesh: InstancedMesh;
+  trunk: InstancedMesh;
+  rect: Rect;
+  rot: number;
+  pine: boolean;
+  /** Сколько ударов мечом ещё выдержит */
+  hp: number;
+  /** 0 — стоит; >0 — сколько секунд как падает/лежит */
+  fallT: number;
+  fallDir: number;
+}
+
 export interface WindowPane {
   mesh: Mesh;
   /** Центр окна и наружная нормаль стены (в мире) */
@@ -159,6 +176,8 @@ export class World {
   private noDecor: Rect[] = [];
   /** Стволы деревьев — по ним рубят дерево для торговца */
   readonly treeSpots: Vector3[] = [];
+  /** Деревья, которые можно срубить: крона, невидимый ствол, препятствие для ботов */
+  readonly treeList: TreeInfo[] = [];
   /** Машины деревни: на них можно ездить */
   readonly cars: { mesh: Mesh; yaw: number; home: Vector3; homeYaw: number }[] = [];
   private glassMat: StandardMaterial | null = null;
@@ -222,6 +241,7 @@ export class World {
       this.scatterAmmo();
       this.buildStones();
     }
+    this.extraTrees();
     this.scatterDecor(this.detail);
 
     for (const m of this.staticMeshes) {
@@ -859,7 +879,60 @@ export class World {
     trunk.scaling.set(s, 1, s);
     trunk.isVisible = false;
     this.register(trunk, "world", true);
-    this.obstacles.push({ x0: x - 1.2, z0: z - 1.2, x1: x + 1.2, z1: z + 1.2 });
+    const rect = { x0: x - 1.2, z0: z - 1.2, x1: x + 1.2, z1: z + 1.2 };
+    this.obstacles.push(rect);
+    this.treeList.push({ pos: new Vector3(x, this.heightAt(x, z), z), mesh: tree, trunk, rect, rot, pine, hp: TREE_HP, fallT: 0, fallDir: 0 });
+  }
+
+  /** Ещё деревья по всей карте (Даниэль: «нужна природа, больше деревьев») */
+  private extraTrees(): void {
+    const n = { 1: 45, 2: 90, 3: 10, 4: 25 }[this.level] ?? 0;
+    const H = MAP_HALF - 4;
+    for (let i = 0; i < Math.round(n * Math.min(1, this.detail + 0.2)); i++) {
+      const p = this.findFree(-H, -H, H, H, 2.5);
+      if (p) this.placeTree(p.x, p.z);
+    }
+  }
+
+  /** Удар по дереву. Возвращает true, если от этого удара оно начало падать */
+  chopTree(t: TreeInfo, fromYaw: number): boolean {
+    if (t.fallT > 0) return false;
+    t.hp--;
+    if (t.hp > 0) return false;
+    t.fallT = 0.0001;
+    t.fallDir = fromYaw;
+    t.mesh.unfreezeWorldMatrix();
+    t.mesh.rotation.y = fromYaw;
+    t.trunk.setEnabled(false);
+    t.rect.x1 = t.rect.x0;
+    t.rect.z1 = t.rect.z0;
+    return true;
+  }
+
+  /** Падающие деревья: наклон с ускорением, удар о землю, потом исчезают; через минуту вырастают снова */
+  updateTrees(dt: number): { landed: Vector3[] } {
+    const landed: Vector3[] = [];
+    for (const t of this.treeList) {
+      if (t.fallT <= 0) continue;
+      const prev = t.fallT;
+      t.fallT += dt;
+      const k = Math.min(1, (t.fallT / 1.4) ** 2);
+      t.mesh.rotation.x = k * (Math.PI / 2 - 0.08);
+      if (prev < 1.4 && t.fallT >= 1.4) landed.push(t.pos.add(new Vector3(Math.sin(t.fallDir) * 3, 0.5, Math.cos(t.fallDir) * 3)));
+      if (t.fallT > 9) t.mesh.setEnabled(false);
+      if (t.fallT > 60) this.regrowTree(t);
+    }
+    return { landed };
+  }
+
+  regrowTree(t: TreeInfo): void {
+    t.fallT = 0;
+    t.hp = TREE_HP;
+    t.mesh.rotation.set(0, t.rot, 0);
+    t.mesh.setEnabled(true);
+    t.trunk.setEnabled(true);
+    t.rect.x1 = t.rect.x0 + 2.4;
+    t.rect.z1 = t.rect.z0 + 2.4;
   }
 
   private placeBush(x: number, z: number): void {

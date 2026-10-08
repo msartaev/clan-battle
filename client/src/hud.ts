@@ -72,7 +72,7 @@ export class Hud {
     apply();
   }
 
-  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; res: { wood: number; leather: number }; bombs: { weak: number; strong: number; boom: number; frost: number }; domeLeft: number; teams: Record<ClanId, number>; ffaAlive?: number; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; res: { wood: number; leather: number }; inv?: Record<string, number>; building?: string | null; bombs: { weak: number; strong: number; boom: number; frost: number }; domeLeft: number; teams: Record<ClanId, number>; ffaAlive?: number; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
     const hp = Math.ceil(s.hp);
     this.set("hp", hp, () => {
       this.hpNum.textContent = String(hp);
@@ -90,8 +90,18 @@ export class Hud {
       const dome = s.domeLeft > 0 ? `<span class="dome-on">Купол: ${Math.ceil(s.domeLeft)} с</span> · ` : "";
       this.bombsEl.innerHTML = `${dome}Купол ${s.bombs.weak}+${s.bombs.strong} · 💥 ${s.bombs.boom} · 🧊 ${s.bombs.frost}`;
     });
-    this.set("res", `${s.res.wood}|${s.res.leather}`, () => {
-      this.resEl.textContent = s.res.wood || s.res.leather ? `🪵 ${s.res.wood} · 🟫 ${s.res.leather}` : "";
+    const inv = s.inv ?? {};
+    const invKey = Object.values(inv).join(",");
+    this.set("res", `${s.res.wood}|${s.res.leather}|${invKey}|${s.building}`, () => {
+      const parts: string[] = [];
+      if (s.res.wood || s.res.leather) parts.push(`🪵 ${s.res.wood} · 🟫 ${s.res.leather}`);
+      const icons: Record<string, string> = { spikes: "⚠️", guard: "🛡", fenceWeak: "⚡", fenceStrong: "⚡⚡" };
+      const items = Object.entries(inv)
+        .filter(([, n]) => n > 0)
+        .map(([k, n]) => (k === s.building ? `[${icons[k]}${n}]` : `${icons[k]}${n}`));
+      if (items.length) parts.push(`Инвентарь (T): ${items.join(" ")}`);
+      this.resEl.textContent = parts.join(" · ");
+      document.body.classList.toggle("has-inv", items.length > 0);
     });
     this.set("owned", s.owned.join(","), () => {
       this.slots.forEach((el, i) => (el.style.display = s.owned.includes(WEAPON_ORDER[i]) ? "" : "none"));

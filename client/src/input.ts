@@ -30,6 +30,9 @@ export class Input {
    * боевые "boom" (F) / "frost" (R) / "combat" (кнопка «Бомба»)
    */
   bomb: "weak" | "strong" | "any" | "boom" | "frost" | "combat" | null = null;
+  /** Стройка: T — следующий предмет из инвентаря, X — убрать */
+  build = false;
+  buildCancel = false;
 
   mouseSensitivity = 0.0022;
   touchSensitivity = 0.0055;
@@ -85,6 +88,8 @@ export class Input {
     this.scopeToggle = false;
     this.bomb = null;
     this.use = false;
+    this.build = false;
+    this.buildCancel = false;
   }
 
   reset(): void {
@@ -122,6 +127,8 @@ export class Input {
       if (e.code === "KeyF") this.bomb = "boom";
       if (e.code === "KeyE") this.use = true;
       if (e.code === "KeyR") this.bomb = "frost";
+      if (e.code === "KeyT") this.build = true;
+      if (e.code === "KeyX") this.buildCancel = true;
       const m = /^Digit([1-9])$/.exec(e.code);
       if (m) this.weaponSelect = Number(m[1]) - 1;
     });
@@ -328,6 +335,7 @@ export class Input {
     btn("btn-dome", () => (this.bomb = "any"));
     btn("btn-bomb", () => (this.bomb = "combat"));
     btn("btn-car", () => (this.use = true));
+    btn("btn-build", () => (this.build = true));
     btn("btn-weapon", () => (this.weaponCycle = 1));
     root.classList.add("on");
   }

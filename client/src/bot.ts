@@ -47,7 +47,7 @@ export class Bot {
   /** Здоровье при появлении: у охранника 200 */
   readonly maxHp: number;
   /** Охранник: стережёт точку (бункер), бьёт мечом, не стреляет и не бегает за флагом */
-  readonly guardHome: Vector3 | null;
+  guardHome: Vector3 | null;
   lives: number = RULES.lives;
   /** Когда последний раз ранили — захват флага сбрасывается */
   lastHitAt = -999;

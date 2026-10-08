@@ -1,3 +1,4 @@
+import { showCats } from "./cats";
 import "./style.css";
 import type { ClanId, WeaponId } from "@clan-battle/shared";
 import { CLANS } from "@clan-battle/shared";
@@ -47,30 +48,34 @@ function selectClan(c: ClanId): void {
 clanButtons.forEach((b) => b.addEventListener("click", () => selectClan(b.dataset.clan as ClanId)));
 selectClan(clan);
 
-// ----- Уровни: следующий открывается победой на предыдущем -----
+// ----- Уровни: 1–4 открыты сразу; следующие — когда выиграны все четыре (идея Даниэля) -----
+const FREE_LEVELS = 4;
 const MAX_LEVEL = 4;
-let unlocked = 1;
+let won = new Set<number>();
 try {
-  unlocked = Math.min(MAX_LEVEL, Math.max(1, Number(localStorage.getItem("cb_unlocked")) || 1));
+  won = new Set((localStorage.getItem("cb_won") ?? "").split(",").map(Number).filter((n) => n >= 1 && n <= MAX_LEVEL));
+  // Раньше уровни открывались по очереди: всё до открытого считаем пройденным
+  const old = Number(localStorage.getItem("cb_unlocked")) || 1;
+  for (let n = 1; n < old; n++) won.add(n);
 } catch {
-  /* нет хранилища — открыт первый */
+  /* нет хранилища */
 }
-// Для проверки и демонстрации: ?level=2 открывает уровень сразу
+const isOpen = (n: number) => n <= FREE_LEVELS || [1, 2, 3, 4].every((k) => won.has(k));
 let level = Math.min(MAX_LEVEL, Math.max(1, Number(params.get("level")) || 1));
-if (level > unlocked) unlocked = level;
 const levelButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("#levels button"));
 function renderLevels(): void {
   levelButtons.forEach((b) => {
     const n = Number(b.dataset.level);
-    b.disabled = n > unlocked;
-    b.textContent = (n > unlocked ? "🔒 " : "") + b.textContent!.replace("🔒 ", "");
+    const open = isOpen(n);
+    b.disabled = !open;
+    b.textContent = (open ? "" : "🔒 ") + (won.has(n) ? "⭐ " : "") + b.textContent!.replace(/^(🔒 )?(⭐ )?/, "");
     b.classList.toggle("selected", n === level);
   });
 }
 levelButtons.forEach((b) =>
   b.addEventListener("click", () => {
     const n = Number(b.dataset.level);
-    if (n > unlocked || n === level) return;
+    if (!isOpen(n) || n === level) return;
     level = n;
     renderLevels();
     // Другая карта — мир строится заново
@@ -81,16 +86,20 @@ levelButtons.forEach((b) =>
   }),
 );
 renderLevels();
-function unlockNext(): boolean {
-  if (level < unlocked || level >= MAX_LEVEL) return false;
-  unlocked = level + 1;
+/** Победа на уровне: ставим звёздочку. Возвращает текст, если этим открылось что-то новое */
+function markWon(): string {
+  const before = [1, 2, 3, 4].every((k) => won.has(k));
+  won.add(level);
   try {
-    localStorage.setItem("cb_unlocked", String(unlocked));
+    localStorage.setItem("cb_won", [...won].join(","));
   } catch {
     /* не сохранилось */
   }
   renderLevels();
-  return true;
+  const left = [1, 2, 3, 4].filter((k) => !won.has(k));
+  if (!before && !left.length) return " Пройдены все четыре уровня! Скоро откроется уровень 5 — гонки.";
+  if (left.length) return ` Осталось пройти: ${left.join(", ")}.`;
+  return "";
 }
 
 // ----- Снаряжение: до 4 видов оружия и 2 видов бомб, выбор запоминается -----
@@ -213,8 +222,9 @@ function startGame(): void {
         game.onGameOver = (r) => {
           $("over-title").textContent = r.winner === null ? (r.reason.includes("ничья") ? "Ничья" : "Ты выбыл") : r.won ? "Победа! 🏆" : "Поражение";
           const end = /[.!]$/.test(r.reason) ? "" : ".";
-          const opened = r.won && unlockNext() ? ` Открыт уровень ${unlocked}!` : "";
+          const opened = r.won ? markWon() : "";
           $("over-text").textContent = `${r.reason}${end} Врагов повержено тобой: ${r.kills}.${opened}`;
+          showCats(r.winner === null ? (r.won ? true : null) : r.won);
           showScreen("over");
           if (document.pointerLockElement) document.exitPointerLock();
         };

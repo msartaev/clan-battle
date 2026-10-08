@@ -1070,3 +1070,67 @@ body.touch #car-hint {
   opacity: 0.45;
   cursor: default;
 }
+
+/* Коты конца боя по бокам экрана */
+.end-cat {
+  position: absolute;
+  bottom: 0;
+  width: min(26vw, 260px);
+  pointer-events: none;
+  animation: cat-in 0.6s ease-out both;
+}
+.end-cat.left {
+  left: max(8px, env(safe-area-inset-left));
+}
+.end-cat.right {
+  right: max(8px, env(safe-area-inset-right));
+  transform: scaleX(-1);
+}
+.end-cat svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.45));
+}
+.end-cat:not(.lose) svg {
+  animation: cat-cheer 0.9s ease-in-out infinite alternate;
+}
+@keyframes cat-in {
+  from {
+    opacity: 0;
+    translate: 0 40%;
+  }
+}
+@keyframes cat-cheer {
+  to {
+    translate: 0 -6%;
+  }
+}
+@media (max-height: 500px) {
+  .end-cat {
+    width: min(20vw, 170px);
+  }
+}
+
+/* Стройка: кнопка видна, когда в инвентаре что-то есть */
+#btn-build {
+  display: none;
+  top: 102px;
+  right: calc(max(14px, env(safe-area-inset-right)) + 290px);
+}
+body.has-inv #btn-build,
+body.building #btn-build {
+  display: block;
+}
+body.building #btn-build {
+  background: rgba(60, 170, 90, 0.75);
+}
+body.building #btn-fire::after {
+  content: "Поставить";
+}
+body.building #btn-fire {
+  font-size: 0;
+}
+body.building #btn-fire::after {
+  font-size: 16px;
+}
