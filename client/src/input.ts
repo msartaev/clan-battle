@@ -29,7 +29,7 @@ export class Input {
    * Бомба: лечебные "weak" (G) / "strong" (H) / "any" (кнопка «Купол»);
    * боевые "boom" (F) / "frost" (R) / "combat" (кнопка «Бомба»)
    */
-  bomb: "weak" | "strong" | "any" | "boom" | "frost" | "combat" | null = null;
+  bomb: "weak" | "strong" | "any" | "boom" | "frost" | "grenade" | "push" | "combat" | null = null;
   /** Стройка: T — следующий предмет из инвентаря, X — убрать */
   build = false;
   buildCancel = false;
@@ -128,6 +128,8 @@ export class Input {
       if (e.code === "KeyE") this.use = true;
       if (e.code === "KeyR") this.bomb = "frost";
       if (e.code === "KeyT") this.build = true;
+      if (e.code === "KeyC") this.bomb = "grenade";
+      if (e.code === "KeyZ") this.bomb = "push";
       if (e.code === "KeyX") this.buildCancel = true;
       const m = /^Digit([1-9])$/.exec(e.code);
       if (m) this.weaponSelect = Number(m[1]) - 1;

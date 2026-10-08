@@ -50,7 +50,7 @@ selectClan(clan);
 
 // ----- Уровни: 1–4 открыты сразу; следующие — когда выиграны все четыре (идея Даниэля) -----
 const FREE_LEVELS = 4;
-const MAX_LEVEL = 6;
+const MAX_LEVEL = 7;
 let won = new Set<number>();
 try {
   won = new Set((localStorage.getItem("cb_won") ?? "").split(",").map(Number).filter((n) => n >= 1 && n <= MAX_LEVEL));

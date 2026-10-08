@@ -1112,6 +1112,76 @@ const browser = await chromium.launch({
   await ctx.close();
 }
 
+// ---------- Уровень 7: легендарная арена ----------
+{
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  const page = await ctx.newPage();
+  watch(page, "level7");
+  await page.goto(URL + "?test&level=7", { waitUntil: "load" });
+  await page.click("#play");
+  await page.waitForFunction(() => !!window.__game, null, { timeout: 180000 });
+  const l7 = await page.evaluate(async () => {
+    const g = window.__game;
+    const p = g.player;
+    const V = p.collider.position.constructor;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    const bots = g.bots.length;
+    const bombs0 = Object.values(g.bombs).reduce((a, b) => a + b, 0);
+    p.invulnerableUntil = g.now + 999;
+    // Сундук с бомбой
+    const bc = g["bombChests"][0];
+    p.collider.position.set(bc.pos.x, 0, bc.pos.z);
+    await frames(3);
+    const bombs1 = Object.values(g.bombs).reduce((a, b) => a + b, 0);
+    // Граната бьёт вдвое сильнее бомбы
+    const enemy = g.bots.find((b) => b.clan !== p.clan);
+    enemy.update = () => {};
+    const at = new V(10, 0, -150);
+    enemy.spawn(at.clone(), 0);
+    enemy.hp = 1000;
+    g["explode"](at.add(new V(1, 0, 0)), p.clan);
+    const boomDmg = 1000 - enemy.hp;
+    enemy.hp = 1000;
+    g["explode"](at.add(new V(1, 0, 0)), p.clan, 2);
+    const grenadeDmg = 1000 - enemy.hp;
+    // Отталкивающая бомба отбрасывает
+    enemy.hp = 100;
+    const before = enemy.position.clone();
+    g["pushAt"](at.add(new V(-1, 0, 0)), p.clan);
+    const pushed = Math.hypot(enemy.position.x - before.x, enemy.position.z - before.z);
+    // Лёд жжёт по 1 в секунду
+    enemy.hp = 100;
+    enemy.frozenUntil = g.now + 10;
+    g["dotTick"] = 0;
+    g["updateFrostBurn"](1.01);
+    g["updateFrostBurn"](1.01);
+    const burned = 100 - enemy.hp;
+    delete enemy.update;
+    // Лечебная бомба: лечит до полного, плата растёт 2, 4
+    g.bombs.weak = 2;
+    p.hp = 30;
+    g["throwBomb"]("weak");
+    const heal1 = p.hp;
+    p.hp = 30;
+    g["throwBomb"]("weak");
+    const heal2 = p.hp;
+    // Последняя жизнь — бег не работает
+    p.lives = 1;
+    g.input.sprint = true;
+    await frames(2);
+    const noRun = document.body.classList.contains("no-run");
+    return { level: g.world.level, bots, bombs0, bombs1, boomDmg, grenadeDmg, pushed: +pushed.toFixed(1), burned, heal1, heal2, noRun };
+  });
+  console.log("level 7:", l7);
+  if (l7.level !== 7 || l7.bots < 15 || l7.bombs0 !== 0 || l7.bombs1 !== 1 || l7.boomDmg < 40 || l7.boomDmg > 60 || l7.grenadeDmg < l7.boomDmg * 1.9 || l7.pushed < 3 || l7.burned !== 2 || l7.heal1 !== 98 || l7.heal2 !== 96 || !l7.noRun)
+    errors.push("[level7] легендарный уровень работает не так");
+  await page.screenshot({ path: path.join(shots, "13-level7-legend.png") });
+  await ctx.close();
+}
+
 await browser.close();
 console.log("\nconsole/page errors:", errors.length ? errors : "none");
 process.exit(errors.length ? 1 : 0);

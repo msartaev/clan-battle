@@ -72,7 +72,7 @@ export class Hud {
     apply();
   }
 
-  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; res: { wood: number; leather: number }; inv?: Record<string, number>; building?: string | null; bombs: { weak: number; strong: number; boom: number; frost: number }; domeLeft: number; teams: Record<ClanId, number>; ffaAlive?: number; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
+  update(dt: number, s: { hp: number; ammo: number; weapon: WeaponId; kills: number; lives: number; fps: number; status: string; hidden: boolean; owned: WeaponId[]; swordLevel: number; res: { wood: number; leather: number }; inv?: Record<string, number>; building?: string | null; bombs: { weak: number; strong: number; boom: number; frost: number; grenade?: number; push?: number }; domeLeft: number; teams: Record<ClanId, number>; ffaAlive?: number; timeLeft: number; capture: { text: string; t: number; color: string } | null }): void {
     const hp = Math.ceil(s.hp);
     this.set("hp", hp, () => {
       this.hpNum.textContent = String(hp);
@@ -85,10 +85,12 @@ export class Hud {
       this.ammo.innerHTML = melee ? "держи — замах, отпусти — удар" : `<b>${s.ammo}</b> патронов`;
       this.ammo.classList.toggle("empty", !melee && s.ammo <= 0);
     });
-    const bombsText = `${s.bombs.weak}|${s.bombs.strong}|${s.bombs.boom}|${s.bombs.frost}|${Math.ceil(s.domeLeft)}`;
+    const extra = (s.bombs.grenade ?? 0) + (s.bombs.push ?? 0);
+    const bombsText = `${s.bombs.weak}|${s.bombs.strong}|${s.bombs.boom}|${s.bombs.frost}|${s.bombs.grenade}|${s.bombs.push}|${Math.ceil(s.domeLeft)}`;
     this.set("bombs", bombsText, () => {
       const dome = s.domeLeft > 0 ? `<span class="dome-on">Купол: ${Math.ceil(s.domeLeft)} с</span> · ` : "";
-      this.bombsEl.innerHTML = `${dome}Купол ${s.bombs.weak}+${s.bombs.strong} · 💥 ${s.bombs.boom} · 🧊 ${s.bombs.frost}`;
+      const more = extra || document.body.classList.contains("legend") ? ` · 💣 ${s.bombs.grenade ?? 0} · 🌀 ${s.bombs.push ?? 0}` : "";
+      this.bombsEl.innerHTML = `${dome}Купол ${s.bombs.weak}+${s.bombs.strong} · 💥 ${s.bombs.boom} · 🧊 ${s.bombs.frost}${more}`;
     });
     const inv = s.inv ?? {};
     const invKey = Object.values(inv).join(",");

@@ -1139,3 +1139,9 @@ body.building #btn-fire::after {
 body.race #teams {
   display: none;
 }
+
+/* Легендарный: на последней жизни бег отключён */
+body.no-run #btn-sprint {
+  opacity: 0.3;
+  pointer-events: none;
+}

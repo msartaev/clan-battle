@@ -8,3 +8,4 @@ Grass: Foliage001/002/003/006 by ambientCG, CC0 — composited into grass_tuft.p
 Level 2: aerial_grass_rock, corrugated_iron, rusty_corrugated_iron, dirty_concrete (Poly Haven, CC0).
 Level 4: snow_02, snow_field_aerial (Poly Haven, CC0).
 Level 5: asphalt_02 (Poly Haven, CC0) as asphalt.jpg.
+Level 7: sand_01 (Poly Haven, CC0) as sand.jpg.

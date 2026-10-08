@@ -101,6 +101,12 @@ const isWorldOrSoft = (m: AbstractMesh) => m.metadata?.kind === "world" || m.met
 const BASE_FOV = 1.05;
 
 type InvItem = "spikes" | "guard" | "fenceWeak" | "fenceStrong";
+type CombatBomb = "boom" | "frost" | "grenade" | "push";
+/** Цвет бомбы по виду: чёрная взрывная, голубая ледяная, зелёная граната, фиолетовая отталкивающая */
+function bombMat(scene: Scene, k: CombatBomb): StandardMaterial {
+  const c = { boom: ["#2a2a2a", 0], frost: ["#7fd8ff", 0.4], grenade: ["#4b5d2a", 0.05], push: ["#a46cff", 0.4] } as const;
+  return flatMat(scene, c[k][0], c[k][1]);
+}
 type ShopItem = InvItem | "weak";
 interface Fence {
   root: Mesh;
@@ -164,10 +170,17 @@ export class Game {
     snakes: { by: null, t: 0, startedAt: 0 },
   };
   private medkits: AmmoChest[] = [];
+  /** Уровень 7: тёмно-красные сундуки с бомбами */
+  private bombChests: AmmoChest[] = [];
   readonly animals: Animal[] = [];
   private birds!: Birds;
   /** Дроны леса (уровень 2) */
   readonly drones: Drone[] = [];
+  /** Уровень 7 — легендарный: оружие ×2, новые бомбы, сундуки с бомбами */
+  get legend(): boolean {
+    return this.world.level === 7;
+  }
+
   /** Уровень 4: каждый сам за себя — враги все, кроме тебя самого */
   get ffa(): boolean {
     return this.world.level === 4;
@@ -247,9 +260,12 @@ export class Game {
   }
 
   /** Лечебные бомбы в запасе */
-  bombs = { weak: 1, strong: 0, boom: 1, frost: 1 };
+  bombs = { weak: 1, strong: 0, boom: 1, frost: 1, grenade: 0, push: 0 };
+  /** Уровень 7: сколько раз лечился бомбой — каждое лечение «стоит» дороже */
+  private healUses = 0;
+  private dotTick = 0;
   /** Летящие боевые бомбы */
-  private thrown: { mesh: Mesh; pos: Vector3; vel: Vector3; kind: "boom" | "frost"; clan: ClanId }[] = [];
+  private thrown: { mesh: Mesh; pos: Vector3; vel: Vector3; kind: CombatBomb; clan: ClanId }[] = [];
   /** Игрока заморозили вражеской бомбой */
   private playerFrozenUntil = -1;
   /** Ледяные глыбы вокруг замороженных */
@@ -341,7 +357,12 @@ export class Game {
     // Команды 5 на 5: сначала враги (botCount), потом союзники — на одного меньше, ведь игрок тоже в команде
     const enemy = enemyClan(opts.clan);
     const lvl = opts.level ?? 1;
-    if (lvl === 6) {
+    if (lvl === 7) {
+      // Легендарный: 20 на 20 (на слабых устройствах меньше, чтобы не тормозило)
+      const per = opts.detail >= 1 ? 20 : opts.detail >= 0.6 ? 12 : 8;
+      for (let i = 0; i < per; i++) this.bots.push(new Bot(scene, enemy, BOT_WEAPONS[i % BOT_WEAPONS.length]));
+      for (let i = 0; i < per - 1; i++) this.bots.push(new Bot(scene, opts.clan, BOT_WEAPONS[(i + 1) % BOT_WEAPONS.length], true));
+    } else if (lvl === 6) {
       // Ферма: дуэль — ты против одного бойца другого клана; он идёт угонять твой трактор
       const b = new Bot(scene, enemy, "clanWeapon");
       b.attacker = true;
@@ -360,6 +381,9 @@ export class Game {
     }
     // Уровень 3 — соло: союзников нет
     const allies = (opts.level ?? 1) >= 3 ? 0 : opts.botCount - 1;
+    if (lvl === 7) {
+      for (const c of ["dragons", "snakes"] as const) this.bots.filter((b) => b.clan === c).slice(3, 8).forEach((b) => (b.attacker = true));
+    }
     if (lvl === 5) {
       const game = this;
       this.race = new Race(
@@ -525,6 +549,44 @@ export class Game {
       inst.isPickable = false;
       this.chests.push({ mesh: inst, pos: p.clone(), active: true, respawnAt: 0 });
     });
+    if (!this.world.bombSpots.length) return;
+    // Сундуки с бомбами: тёмно-красные с чёрной бомбой на крышке
+    const bb = MeshBuilder.CreateBox("bchestBase", { width: 0.9, height: 0.55, depth: 0.6 }, this.scene);
+    bb.material = flatMat(this.scene, "#8e1b1b", 0.2);
+    const bl = MeshBuilder.CreateBox("bchestLid", { width: 0.94, height: 0.14, depth: 0.64 }, this.scene);
+    bl.position.y = 0.32;
+    bl.material = flatMat(this.scene, "#5e1010", 0.15);
+    const ball = MeshBuilder.CreateSphere("bchestBomb", { diameter: 0.34, segments: 8 }, this.scene);
+    ball.position.y = 0.55;
+    ball.material = flatMat(this.scene, "#1a1a1a");
+    const bchest = Mesh.MergeMeshes([bb, bl, ball], true, true, undefined, false, true)!;
+    bchest.isVisible = false;
+    bchest.isPickable = false;
+    this.world.bombSpots.forEach((p, i) => {
+      const inst = bchest.createInstance(`bchest${i}`);
+      inst.position.set(p.x, p.y + 0.3, p.z);
+      inst.isPickable = false;
+      this.bombChests.push({ mesh: inst, pos: p.clone(), active: true, respawnAt: 0 });
+    });
+  }
+
+  /** Сундук с бомбами: случайная бомба (взрывная, ледяная, граната, отталкивающая или лечебная) */
+  private pickupBombChests(): void {
+    const p = this.player;
+    for (const c of this.bombChests) {
+      if (!c.active) continue;
+      if ((c.pos.x - p.position.x) ** 2 + (c.pos.z - p.position.z) ** 2 > 1.6 * 1.6 || p.position.y > 1.5) continue;
+      const kinds = (["boom", "frost", "grenade", "push", "weak"] as const).filter((k) => this.bombs[k] < RULES.maxBombs);
+      if (!kinds.length) continue;
+      const k = kinds[Math.floor(this.rng() * kinds.length)];
+      this.bombs[k]++;
+      c.active = false;
+      c.mesh.setEnabled(false);
+      c.respawnAt = this.now + 30;
+      this.sfx.pickup();
+      const names = { boom: "Взрывная бомба (F)", frost: "Ледяная бомба (R)", grenade: "Граната (C)", push: "Отталкивающая бомба (Z)", weak: "Лечебная бомба (G)" };
+      this.hud.message(`${names[k]}!`, 1.6, "#ffe14a");
+    }
   }
 
   /** Синие аптечки с белым крестом: +25 здоровья */
@@ -1355,6 +1417,18 @@ export class Game {
       this.hud.message(k === "weak" ? "Нет слабых лечебных бомб" : "Нет сильных лечебных бомб", 1.2, "#ffb347");
       return;
     }
+    if (this.legend) {
+      // Легендарный: лечит до полного, но каждое лечение «забирает» на 2 больше прошлого (2, 4, 6…)
+      this.bombs[k]--;
+      this.healUses++;
+      const cost = 2 * this.healUses;
+      const p = this.player;
+      p.hp = Math.max(1, RULES.maxHp - cost);
+      this.effects.frost(p.position.clone(), 1.5);
+      this.sfx.pickup();
+      this.hud.message(`Вылечен! Плата за лечение: −${cost} (следующее −${cost + 2})`, 2, "#7dffb0");
+      return;
+    }
     this.bombs[k]--;
     this.removeDome();
     const total = k === "weak" ? RULES.domeWeakSec : RULES.domeStrongSec;
@@ -1416,10 +1490,11 @@ export class Game {
 
   // ---------------- Боевые бомбы ----------------
 
-  private throwCombat(kind: "boom" | "frost" | "combat"): void {
-    const k = kind === "combat" ? (this.bombs.boom > 0 ? "boom" : "frost") : kind;
+  private throwCombat(kind: CombatBomb | "combat"): void {
+    const k: CombatBomb = kind === "combat" ? (["grenade", "boom", "frost", "push"] as const).find((x) => this.bombs[x] > 0) ?? "boom" : kind;
     if (this.bombs[k] <= 0) {
-      this.hud.message(k === "boom" ? "Нет взрывных бомб" : "Нет замораживающих бомб", 1.2, "#ffb347");
+      const names: Record<CombatBomb, string> = { boom: "взрывных бомб", frost: "замораживающих бомб", grenade: "гранат", push: "отталкивающих бомб" };
+      this.hud.message(`Нет ${names[k]}`, 1.2, "#ffb347");
       return;
     }
     if (this.inDome()) {
@@ -1432,7 +1507,7 @@ export class Game {
     const dir = dirFromYawPitch(p.yaw, p.pitch - 0.25);
     const pos = p.position.add(new Vector3(0, p.eyeHeight - 0.2, 0)).add(dir.scale(0.6));
     const mesh = MeshBuilder.CreateSphere("bomb", { diameter: 0.22, segments: 8 }, this.scene);
-    mesh.material = flatMat(this.scene, k === "boom" ? "#2a2a2a" : "#7fd8ff", k === "boom" ? 0 : 0.4);
+    mesh.material = bombMat(this.scene, k);
     mesh.isPickable = false;
     mesh.position.copyFrom(pos);
     this.thrown.push({ mesh, pos, vel: dir.scale(16), kind: k, clan: p.clan });
@@ -1457,6 +1532,8 @@ export class Game {
         t.mesh.dispose();
         this.thrown.splice(i, 1);
         if (t.kind === "boom") this.explode(at, t.clan);
+        else if (t.kind === "grenade") this.explode(at, t.clan, 2);
+        else if (t.kind === "push") this.pushAt(at, t.clan);
         else this.freezeAt(at, t.clan);
       }
     }
@@ -1471,7 +1548,7 @@ export class Game {
   }
 
   /** Бот бросает бомбу по дуге точно в цель (гравитация как у броска игрока) */
-  private botThrow(b: Bot, kind: "boom" | "frost", t: Target): void {
+  private botThrow(b: Bot, kind: CombatBomb, t: Target): void {
     const from = b.humanoid.getMuzzlePosition();
     const to = t.pos.add(new Vector3(0, 0.3, 0));
     const d = to.subtract(from);
@@ -1480,25 +1557,28 @@ export class Game {
     const time = Math.max(0.3, horiz / h);
     const vel = new Vector3((d.x / horiz) * h, (d.y + 0.5 * 14 * time * time) / time, (d.z / horiz) * h);
     const mesh = MeshBuilder.CreateSphere("bomb", { diameter: 0.22, segments: 8 }, this.scene);
-    mesh.material = flatMat(this.scene, kind === "boom" ? "#2a2a2a" : "#7fd8ff", kind === "boom" ? 0 : 0.4);
+    mesh.material = bombMat(this.scene, kind);
     mesh.isPickable = false;
     mesh.position.copyFrom(from);
     this.thrown.push({ mesh, pos: from.clone(), vel, kind, clan: b.clan });
     const vol = clamp(1 - Vector3.Distance(from, this.player.position) / 60, 0.1, 0.8);
     this.sfx.swing(vol);
-    if (t === this.playerTarget) this.hud.message(kind === "boom" ? "Бомба! Беги!" : "Ледяная бомба! Уходи!", 1.2, "#ff6b5a");
+    if (t === this.playerTarget) this.hud.message(kind === "frost" ? "Ледяная бомба! Уходи!" : kind === "grenade" ? "Граната! Беги!" : "Бомба! Беги!", 1.2, "#ff6b5a");
   }
 
   /** Взрыв: урон по площади (не по своим), звери тоже, окна в радиусе бьются */
-  private explode(at: Vector3, clan: ClanId): void {
-    const R = RULES.blastRadius;
+  /** mult — граната бьёт вдвое сильнее бомбы */
+  private explode(at: Vector3, clan: ClanId, mult = 1): void {
+    const R = RULES.blastRadius * (mult > 1 ? 1.2 : 1);
     const vol = clamp(1 - Vector3.Distance(at, this.player.position) / 80, 0.15, 1);
     this.sfx.boom(vol);
     this.effects.explosion(at, R);
+    // Легендарный уровень: бомба — 60, граната — 120 (Даниэль)
+    const base = (this.legend ? 60 : RULES.blastDamage) * mult;
     const dmgAt = (pos: Vector3) => {
       const d = Vector3.Distance(at, pos.add(new Vector3(0, 0.9, 0)));
       if (d > R) return 0;
-      return Math.round(RULES.blastDamage * (1 - (d / R) * 0.67));
+      return Math.round(base * (1 - (d / R) * 0.67));
     };
     for (const b of this.bots) {
       if (!b.alive || b.clan === clan) continue;
@@ -1516,9 +1596,46 @@ export class Game {
     }
     for (const w of this.world.windows) if (!w.broken && Vector3.Distance(w.center, at) < R) this.shatter(w);
     for (const f of [...this.fences]) if (f.clan !== clan && Vector3.Distance(f.pos, at) < R) this.damageFence(f, 5);
-    if (this.race && clan === this.player.clan) this.kills += this.race.blast(at, R, (d) => Math.round(RULES.blastDamage * (1 - Math.min(1, d / R) * 0.67)));
+    if (this.race && clan === this.player.clan) this.kills += this.race.blast(at, R, (d) => Math.round(base * (1 - Math.min(1, d / R) * 0.67)));
     // Камера вздрагивает, если взрыв рядом
     if (vol > 0.6) this.vmKick = 1;
+  }
+
+  /** Легендарный: лёд ещё и жжёт — по 1 урону в секунду, пока стоишь замороженным */
+  private updateFrostBurn(dt: number): void {
+    this.dotTick += dt;
+    if (this.dotTick < 1) return;
+    this.dotTick -= 1;
+    for (const b of this.bots) if (b.alive && this.now < b.frozenUntil) b.takeDamage(1, b.position.clone(), this.now);
+    if (this.player.alive && this.now < this.playerFrozenUntil) {
+      this.player.invulnerableUntil = 0;
+      this.damagePlayer(1);
+    }
+  }
+
+  /** Отталкивающая бомба: отбрасывает врагов от места взрыва и немного ранит */
+  private pushAt(at: Vector3, clan: ClanId): void {
+    const R = 6;
+    const vol = clamp(1 - Vector3.Distance(at, this.player.position) / 80, 0.15, 1);
+    this.sfx.boom(vol * 0.6);
+    this.effects.explosion(at, 2);
+    const shove = (pos: Vector3, move: (v: Vector3) => void) => {
+      const d = pos.subtract(at);
+      d.y = 0;
+      const len = Math.max(0.3, d.length());
+      if (len > R) return false;
+      move(d.scale((8 * (1 - len / R) + 3) / len));
+      return true;
+    };
+    for (const b of this.bots) {
+      if (!b.alive || b.clan === clan) continue;
+      if (shove(b.position, (v) => b.collider.moveWithCollisions(v))) this.damageBot(b, 10);
+    }
+    const p = this.player;
+    if (p.clan !== clan && p.alive && !this.inDome() && !this.driving) {
+      if (shove(p.position, (v) => p.collider.moveWithCollisions(v))) this.damagePlayer(10);
+    }
+    if (this.race && clan === p.clan) this.kills += this.race.blast(at, R, () => 10);
   }
 
   /** Заморозка: враги и звери в зоне стоят во льду 10 секунд */
@@ -1710,9 +1827,11 @@ export class Game {
     this.setVmSwordLevel(1);
     this.chargeFrom = -1;
     const lb = this.ffa ? [] : this.loadout.bombs;
-    this.bombs = { weak: lb.includes("weak") ? 1 : 0, strong: 0, boom: lb.includes("boom") ? 1 : 0, frost: lb.includes("frost") ? 1 : 0 };
-    if (this.race) this.bombs = { weak: 2, strong: 1, boom: 3, frost: 2 };
-    if (this.world.level === 6) this.bombs = { weak: 0, strong: 0, boom: 0, frost: 0 };
+    this.bombs = { weak: lb.includes("weak") ? 1 : 0, strong: 0, boom: lb.includes("boom") ? 1 : 0, frost: lb.includes("frost") ? 1 : 0, grenade: 0, push: 0 };
+    if (this.race) this.bombs = { weak: 2, strong: 1, boom: 3, frost: 2, grenade: 1, push: 1 };
+    // Ферма — без всего; легендарный — бомбы только из сундуков
+    if (this.world.level === 6 || this.legend) this.bombs = { weak: 0, strong: 0, boom: 0, frost: 0, grenade: 0, push: 0 };
+    this.healUses = 0;
     for (const c of this.world.weaponChests) {
       c.open = false;
       (c.lid.parent as TransformNode).rotation.x = 0;
@@ -1775,7 +1894,7 @@ export class Game {
       c.yaw = c.homeYaw;
       c.mesh.rotation.y = c.yaw - Math.PI / 2;
     }
-    for (const c of this.chests) {
+    for (const c of [...this.chests, ...this.bombChests]) {
       c.active = true;
       c.mesh.setEnabled(true);
     }
@@ -1788,6 +1907,7 @@ export class Game {
       this.matchLeft = 20 * 60;
     }
     document.body.classList.toggle("race", !!this.race);
+    document.body.classList.toggle("legend", this.legend);
   }
 
   /** Гонка: игрок всегда за рулём своей машины */
@@ -1899,6 +2019,10 @@ export class Game {
     this.updateViewmodelWeapon();
 
     if (this.state === "playing") {
+      // Легендарный: на последней жизни бегать нельзя — кнопка бега не работает
+      const noRun = this.legend && p.lives <= 1;
+      if (noRun) input.sprint = false;
+      document.body.classList.toggle("no-run", noRun);
       const frozen = this.now < this.playerFrozenUntil;
       if (frozen) {
         // Во льду: только смотреть по сторонам
@@ -1939,9 +2063,10 @@ export class Game {
       else if (input.fire) this.tryShoot(!this.prevFire);
       this.prevFire = input.fire;
       this.pickupChests();
+      this.pickupBombChests();
       this.pickupMedkits();
       this.tryVault();
-      if (input.bomb === "boom" || input.bomb === "frost" || input.bomb === "combat") this.throwCombat(input.bomb);
+      if (input.bomb === "boom" || input.bomb === "frost" || input.bomb === "grenade" || input.bomb === "push" || input.bomb === "combat") this.throwCombat(input.bomb);
       else if (input.bomb) this.throwBomb(input.bomb);
     } else {
       this.prevFire = false;
@@ -1968,6 +2093,7 @@ export class Game {
     this.leaves?.update(dt, this.camera.position, this.world.treeList);
     this.updateHides();
     this.updateDome(dt);
+    if (this.legend) this.updateFrostBurn(dt);
     this.updateSnow(dt);
     this.updateThrown(dt);
     if (this.state === "playing" || this.state === "dead") this.updateMatch(dt);
@@ -2246,7 +2372,7 @@ export class Game {
         return;
       }
       if (target && target.alive && Vector3.Distance(target.position.add(new Vector3(0, 1, 0)), end) < 2.2) {
-        this.damageBot(target, computeDamage(p.weapon, p.clan, target.clan));
+        this.damageBot(target, computeDamage(p.weapon, p.clan, target.clan) * (this.legend ? 2 : 1));
         this.effects.impact(end, true);
       } else if (wHit?.hit || target) {
         this.effects.impact(end, false);
@@ -2527,7 +2653,7 @@ export class Game {
         beast.takeDamage(WEAPONS[b.weapon].damage, this.preyOf(b), this.now);
         this.effects.impact(end, true);
       } else if (hit && t.alive) {
-        const dmg = this.ffa ? WEAPONS[b.weapon].damage : computeDamage(b.weapon, b.clan, t.clan!);
+        const dmg = (this.ffa ? WEAPONS[b.weapon].damage : computeDamage(b.weapon, b.clan, t.clan!)) * (this.legend ? 2 : 1);
         if (isPlayer) {
           if (this.state === "playing") this.damagePlayer(dmg);
         } else if (victim!.takeDamage(dmg, b.position.clone(), this.now)) {
@@ -2624,7 +2750,7 @@ export class Game {
 
   private updateChests(): void {
     const bob = Math.sin(this.now * 2) * 0.06;
-    for (const c of this.chests) {
+    for (const c of [...this.chests, ...this.bombChests]) {
       if (!c.active && this.now >= c.respawnAt) {
         c.active = true;
         c.mesh.setEnabled(true);
