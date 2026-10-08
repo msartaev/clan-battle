@@ -92,6 +92,20 @@ export interface TreeInfo {
   fallDir: number;
 }
 
+/** Гоночная трасса уровня 5: осевая линия, ширина, контрольные точки кругов */
+export interface Track {
+  pts: Vector3[];
+  /** Направление движения в каждой точке */
+  tan: Vector3[];
+  width: number;
+  /** Индекс точки на линии старта */
+  startIdx: number;
+  /** Контрольные точки (индексы в pts) — по порядку, первая — старт */
+  cps: number[];
+  /** Где стоят машины перед стартом (в пещере) */
+  grid: { pos: Vector3; yaw: number }[];
+}
+
 export interface WindowPane {
   mesh: Mesh;
   /** Центр окна и наружная нормаль стены (в мире) */
@@ -178,6 +192,9 @@ export class World {
   readonly treeSpots: Vector3[] = [];
   /** Деревья, которые можно срубить: крона, невидимый ствол, препятствие для ботов */
   readonly treeList: TreeInfo[] = [];
+  track: Track | null = null;
+  /** Зрители на трибунах (уровень 5) — машут руками */
+  fans: Mesh | null = null;
   /** Машины деревни: на них можно ездить */
   readonly cars: { mesh: Mesh; yaw: number; home: Vector3; homeYaw: number }[] = [];
   private glassMat: StandardMaterial | null = null;
@@ -202,12 +219,12 @@ export class World {
 
   constructor(private scene: Scene, private detail = 1, level = 1) {
     this.level = level;
-    MAP_HALF = level === 2 ? 100 : level === 3 ? 45 : level === 4 ? 50 : 64;
+    MAP_HALF = level === 2 || level === 5 ? 100 : level === 3 ? 45 : level === 4 ? 50 : 64;
     // Подвал переезжает вместе с деревней (на уровне 2 она в северо-западном углу)
     const vo = level === 2 ? VILLAGE2 : { x: 0, z: 0 };
     CELLAR.room = { x0: -17.4 + vo.x, x1: -10.6 + vo.x, z0: 6.6 + vo.z, z1: 11.4 + vo.z };
     CELLAR.hole = { x0: -14.6 + vo.x, x1: -11.2 + vo.x, z0: 9.6 + vo.z, z1: 10.8 + vo.z };
-    if (level === 3 || level === 4) {
+    if (level >= 3) {
       // Деревни нет — «люк» уводим за забор, крошечный и незаметный
       CELLAR.room = { x0: 70, x1: 70.2, z0: 70, z1: 70.2 };
       CELLAR.hole = { x0: 70, x1: 70.2, z0: 70, z1: 70.2 };
@@ -228,6 +245,8 @@ export class World {
       this.buildLevel3();
     } else if (level === 4) {
       this.buildLevel4();
+    } else if (level === 5) {
+      this.buildLevel5();
     } else {
       this.buildRoads();
       this.buildBorder();
@@ -882,6 +901,346 @@ export class World {
     const rect = { x0: x - 1.2, z0: z - 1.2, x1: x + 1.2, z1: z + 1.2 };
     this.obstacles.push(rect);
     this.treeList.push({ pos: new Vector3(x, this.heightAt(x, z), z), mesh: tree, trunk, rect, rot, pine, hp: TREE_HP, fallT: 0, fallDir: 0 });
+  }
+
+  // ---------- Уровень 5: гонки ----------
+
+  private buildLevel5(): void {
+    this.buildBorder();
+    // Осевая линия: замкнутая сглаженная кривая по опорным точкам (Катмулл–Ром)
+    const ctrl: [number, number][] = [
+      [-62, -76], [0, -78], [50, -75], [82, -50], [86, 0], [70, 45], [36, 62], [6, 34], [-24, 60], [-64, 72], [-86, 30], [-84, -36],
+    ];
+    const C = ctrl.map(([x, z]) => new Vector3(x, 0, z));
+    const n = C.length;
+    const per = 48;
+    const pts: Vector3[] = [];
+    for (let i = 0; i < n; i++) {
+      const p0 = C[(i - 1 + n) % n], p1 = C[i], p2 = C[(i + 1) % n], p3 = C[(i + 2) % n];
+      for (let k = 0; k < per; k++) pts.push(Vector3.CatmullRom(p0, p1, p2, p3, k / per));
+    }
+    const N = pts.length;
+    const tan = pts.map((_, i) => pts[(i + 1) % N].subtract(pts[(i - 1 + N) % N]).normalize());
+    const width = 14;
+    // Старт — на прямой внизу карты, x ≈ -24; машины ждут в пещере позади
+    let startIdx = 0;
+    let best = 1e9;
+    for (let i = 0; i < per * 2; i++) {
+      const d = Math.abs(pts[i].x + 24) + Math.abs(pts[i].z + 77) * 0.2;
+      if (d < best) {
+        best = d;
+        startIdx = i;
+      }
+    }
+    const cps: number[] = [];
+    for (let k = 0; k < 12; k++) cps.push((startIdx + Math.round((k * N) / 12)) % N);
+    const back = (k: number) => pts[(startIdx - k + N) % N];
+    const grid: Track["grid"] = [];
+    for (let r = 0; r < 2; r++) {
+      for (const side of [-1, 1]) {
+        const i = (startIdx - 14 - r * 9 + N) % N;
+        const t = tan[i];
+        const right = new Vector3(t.z, 0, -t.x);
+        grid.push({ pos: pts[i].add(right.scale(side * 3)), yaw: Math.atan2(t.x, t.z) });
+      }
+    }
+    this.track = { pts, tan, width, startIdx, cps, grid };
+
+    // Асфальт: лента вдоль осевой, текстура по пройденному пути
+    const asphalt = photoMat(this.scene, "asphalt", "#9a9a9a");
+    const ribbon = (name: string, w0: number, w1: number, y: number, mat: StandardMaterial, vScale: number) => {
+      const pos: number[] = [];
+      const uv: number[] = [];
+      const idx: number[] = [];
+      let dist = 0;
+      for (let i = 0; i <= N; i++) {
+        const p = pts[i % N];
+        const t = tan[i % N];
+        const right = new Vector3(t.z, 0, -t.x);
+        if (i > 0) dist += Vector3.Distance(pts[i - 1], p);
+        const a = p.add(right.scale(w0));
+        const b = p.add(right.scale(w1));
+        pos.push(a.x, y, a.z, b.x, y, b.z);
+        uv.push(0, dist / vScale, (w1 - w0) / vScale, dist / vScale);
+        if (i < N) {
+          const q = i * 2;
+          idx.push(q, q + 2, q + 1, q + 1, q + 2, q + 3);
+        }
+      }
+      const vd = new VertexData();
+      vd.positions = pos;
+      vd.indices = idx;
+      vd.uvs = uv;
+      const nrm: number[] = [];
+      VertexData.ComputeNormals(pos, idx, nrm);
+      // Лента может оказаться «вывернутой» — нормали всегда вверх
+      for (let k = 0; k < nrm.length; k += 3) {
+        nrm[k] = 0;
+        nrm[k + 1] = 1;
+        nrm[k + 2] = 0;
+      }
+      vd.normals = nrm;
+      const m = new Mesh(name, this.scene);
+      vd.applyToMesh(m);
+      m.material = mat;
+      m.material.backFaceCulling = false;
+      m.receiveShadows = true;
+      this.register(m, null, false);
+      return m;
+    };
+    ribbon("track", -width / 2, width / 2, 0.03, asphalt, 8);
+    // Бордюры: красно-белые полосы по краям
+    const kerbTex = new DynamicTexture("kerbTex", { width: 64, height: 64 }, this.scene, false);
+    const kc = kerbTex.getContext() as CanvasRenderingContext2D;
+    kc.fillStyle = "#d42a20";
+    kc.fillRect(0, 0, 64, 32);
+    kc.fillStyle = "#f4f4f4";
+    kc.fillRect(0, 32, 64, 32);
+    kerbTex.update();
+    const kerb = new StandardMaterial("kerbMat", this.scene);
+    kerb.diffuseTexture = kerbTex;
+    kerb.specularColor.set(0.1, 0.1, 0.1);
+    ribbon("kerbL", -width / 2 - 1, -width / 2, 0.05, kerb, 3);
+    ribbon("kerbR", width / 2, width / 2 + 1, 0.05, kerb, 3);
+    // Белая разметка по центру — пунктир
+    const dash = MeshBuilder.CreateBox("dash", { width: 0.25, height: 0.02, depth: 3 }, this.scene);
+    dash.material = flatMat(this.scene, "#eeeeee");
+    dash.isPickable = false;
+    for (let i = 0; i < N; i += 4) {
+      const m = dash.createInstance(`dash${i}`);
+      m.position.set(pts[i].x, 0.045, pts[i].z);
+      m.rotation.y = Math.atan2(tan[i].x, tan[i].z);
+      this.register(m, null, false);
+    }
+    dash.isVisible = false;
+    // Трасса — не место для деревьев и домов
+    for (let i = 0; i < N; i += 3) {
+      const p = pts[i];
+      const r = width / 2 + 3;
+      this.obstacles.push({ x0: p.x - r, z0: p.z - r, x1: p.x + r, z1: p.z + r });
+    }
+
+    // Старт/финиш: клетчатая полоса и арка
+    const s0 = pts[startIdx];
+    const sYaw = Math.atan2(tan[startIdx].x, tan[startIdx].z);
+    const checkTex = new DynamicTexture("checkTex", { width: 128, height: 32 }, this.scene, false);
+    const cc = checkTex.getContext() as CanvasRenderingContext2D;
+    for (let x = 0; x < 16; x++) for (let y = 0; y < 4; y++) {
+      cc.fillStyle = (x + y) % 2 ? "#111" : "#f5f5f5";
+      cc.fillRect(x * 8, y * 8, 8, 8);
+    }
+    checkTex.update();
+    const checkMat = new StandardMaterial("checkMat", this.scene);
+    checkMat.diffuseTexture = checkTex;
+    const line = MeshBuilder.CreateGround("finish", { width: width, height: 1.6 }, this.scene);
+    line.position.set(s0.x, 0.06, s0.z);
+    line.rotation.y = sYaw;
+    line.material = checkMat;
+    this.register(line, null, false);
+    const right0 = new Vector3(tan[startIdx].z, 0, -tan[startIdx].x);
+    for (const side of [-1, 1]) {
+      const post = MeshBuilder.CreateBox("archPost", { width: 0.6, height: 7, depth: 0.6 }, this.scene);
+      const at = s0.add(right0.scale(side * (width / 2 + 1.5)));
+      post.position.set(at.x, 3.5, at.z);
+      post.material = flatMat(this.scene, "#d42a20");
+      this.register(post, "world", true, true);
+    }
+    const banner = MeshBuilder.CreateBox("archTop", { width: width + 4, height: 1.4, depth: 0.5 }, this.scene);
+    banner.position.set(s0.x, 7, s0.z);
+    banner.rotation.y = sYaw + Math.PI / 2;
+    banner.material = checkMat;
+    this.register(banner, "world", false, true);
+
+    // Пещера, из которой стартуют: каменный свод над трассой позади старта
+    const caveFrom = 8;
+    const caveTo = 44;
+    // Свод — полуэллипс над дорогой, протянутый вдоль трассы
+    {
+      const J = 18;
+      const Rw = width / 2 + 3.5;
+      const Rh = 7;
+      const pos: number[] = [];
+      const uv: number[] = [];
+      const idx: number[] = [];
+      let dist = 0;
+      let rows = 0;
+      for (let k = caveTo; k >= caveFrom; k--) {
+        const i = (startIdx - k + N) % N;
+        const p = pts[i];
+        const t = tan[i];
+        const right = new Vector3(t.z, 0, -t.x);
+        if (rows > 0) dist += 1.05;
+        for (let j = 0; j <= J; j++) {
+          const a = (Math.PI * j) / J;
+          // Неровный камень: радиус чуть «дышит»
+          const wob = 1 + 0.06 * Math.sin(j * 2.3 + k * 0.7);
+          const v = p.add(right.scale(Math.cos(a) * Rw * wob));
+          pos.push(v.x, Math.sin(a) * Rh * wob, v.z);
+          uv.push((j / J) * 5, dist / 5);
+        }
+        if (rows > 0) {
+          const a0 = (rows - 1) * (J + 1);
+          const b0 = rows * (J + 1);
+          for (let j = 0; j < J; j++) idx.push(a0 + j, b0 + j, a0 + j + 1, a0 + j + 1, b0 + j, b0 + j + 1);
+        }
+        rows++;
+      }
+      const vd = new VertexData();
+      vd.positions = pos;
+      vd.indices = idx;
+      vd.uvs = uv;
+      const nrm: number[] = [];
+      VertexData.ComputeNormals(pos, idx, nrm);
+      vd.normals = nrm;
+      const cave = new Mesh("cave", this.scene);
+      vd.applyToMesh(cave);
+      const caveMat = photoMat(this.scene, "aerial_grass_rock", "#7a746e");
+      cave.material = caveMat;
+      caveMat.backFaceCulling = false;
+      caveMat.twoSidedLighting = true;
+      this.register(cave, "world", false, true);
+      // Стены пещеры держат машины на трассе
+      for (let k = caveFrom; k <= caveTo; k += 2) {
+        const i = (startIdx - k + N) % N;
+        const t = tan[i];
+        const right = new Vector3(t.z, 0, -t.x);
+        for (const side of [-1, 1]) {
+          const wall = MeshBuilder.CreateBox(`caveWall${k}${side}`, { width: 1, height: 4, depth: 2.8 }, this.scene);
+          const at = pts[i].add(right.scale(side * (Rw - 0.6)));
+          wall.position.set(at.x, 2, at.z);
+          wall.rotation.y = Math.atan2(t.x, t.z);
+          wall.isVisible = false;
+          this.register(wall, "world", true);
+        }
+      }
+    }
+    // Задняя стена пещеры
+    {
+      const i = (startIdx - caveTo - 1 + N) % N;
+      const p = pts[i];
+      const back = MeshBuilder.CreateBox("caveBack", { width: width + 8, height: 8, depth: 1.5 }, this.scene);
+      back.position.set(p.x, 3, p.z);
+      back.rotation.y = Math.atan2(tan[i].x, tan[i].z);
+      back.material = photoMat(this.scene, "aerial_grass_rock", "#7a746e");
+      this.register(back, "world", true, true);
+      // Камни вокруг входа — пещера в скале
+      for (let k = caveFrom; k <= caveTo + 2; k += 5) {
+        const q = back.position;
+        void q;
+        const j = (startIdx - k + N) % N;
+        const tt = tan[j];
+        const rr = new Vector3(tt.z, 0, -tt.x);
+        for (const side of [-1, 1]) {
+          const at = pts[j].add(rr.scale(side * (width / 2 + 7 + this.rng() * 3)));
+          this.placeStone(at.x, at.z);
+        }
+      }
+    }
+    void back;
+
+    // Трибуны со зрителями вдоль стартовой прямой (снаружи)
+    this.buildStands(startIdx + 10, 60, width);
+
+    // Свои домики вокруг трассы
+    const houses: [number, number, number][] = [
+      [20, -30, 0], [-40, 0, Math.PI / 2], [40, 15, Math.PI], [-50, 35, 0], [60, -10, -Math.PI / 2],
+    ];
+    houses.forEach(([x, z, r], i) => {
+      if (this.isFree(x, z, 6)) this.buildHouse(i % 3, x, z, r);
+    });
+
+    // Баз нет: точки появления — места на старте
+    const dummy = (clan: ClanId, i: number): BaseInfo => {
+      const flag = MeshBuilder.CreatePlane(`noflag_${clan}`, { size: 0.01 }, this.scene);
+      flag.isVisible = false;
+      const g = grid[i];
+      return { clan, center: g.pos.clone(), spawns: [g.pos.clone()], facing: g.yaw, flagPoint: new Vector3(999, 0, 999), flag };
+    };
+    this.bases = { dragons: dummy("dragons", 0), snakes: dummy("snakes", 1) };
+    // Машина игрока — первая на старте
+    this.buildCar(0, grid[0].pos.x, grid[0].pos.z, grid[0].yaw, "#d22f27");
+    // Сундуки с патронами у обочин
+    for (let k = 1; k < 12; k += 2) {
+      const i = cps[k];
+      const t = tan[i];
+      const right = new Vector3(t.z, 0, -t.x);
+      this.ammoSpots.push(pts[i].add(right.scale(k % 4 === 1 ? 4 : -4)));
+    }
+    // Лес и кусты вокруг
+    for (let i = 0; i < 120; i++) {
+      const p = this.findFree(-96, -96, 96, 96, 2);
+      if (p) this.placeTree(p.x, p.z);
+    }
+    for (let i = 0; i < 50; i++) {
+      const p = this.findFree(-96, -96, 96, 96, 1.2);
+      if (p) this.placeBush(p.x, p.z);
+    }
+  }
+
+  /** Трибуны: ступени с пёстрыми зрителями и навесом */
+  private buildStands(fromIdx: number, len: number, width: number): void {
+    const tr = this.track!;
+    const N = tr.pts.length;
+    const i = (fromIdx + Math.round(len / 2 / 1.2)) % N;
+    const p = tr.pts[i];
+    const t = tr.tan[i];
+    const yaw = Math.atan2(t.x, t.z);
+    const right = new Vector3(t.z, 0, -t.x);
+    // Трибуна слева по ходу (снаружи стартовой прямой — к краю карты)
+    const out = p.z < 0 ? (right.z < 0 ? right : right.scale(-1)) : right;
+    const base = p.add(out.scale(width / 2 + 6));
+    const steps = 5;
+    const concrete = this.mConcrete;
+    for (let k = 0; k < steps; k++) {
+      const step = MeshBuilder.CreateBox(`stand${k}`, { width: len, height: 0.6 * (k + 1), depth: 1.6 }, this.scene);
+      const at = base.add(out.scale(k * 1.6));
+      step.position.set(at.x, 0.3 * (k + 1), at.z);
+      step.rotation.y = yaw + Math.PI / 2;
+      step.material = concrete;
+      this.register(step, "world", true, true);
+    }
+    // Зрители: тонкие экземпляры с разными цветами
+    const fan = MeshBuilder.CreateBox("fan", { width: 0.45, height: 0.9, depth: 0.35 }, this.scene);
+    fan.material = flatMat(this.scene, "#ffffff");
+    fan.isPickable = false;
+    const head = MeshBuilder.CreateSphere("fanHead", { diameter: 0.3, segments: 6 }, this.scene);
+    head.position.y = 0.6;
+    const fanMesh = Mesh.MergeMeshes([fan, head], true)!;
+    fanMesh.material = flatMat(this.scene, "#ffffff");
+    const mats: number[] = [];
+    const cols: number[] = [];
+    const palette = ["#e53935", "#1e88e5", "#fdd835", "#43a047", "#fb8c00", "#8e24aa", "#ffffff", "#212121"];
+    const along = new Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+    for (let k = 0; k < steps; k++) {
+      for (let s = -len / 2 + 1; s < len / 2 - 1; s += 0.8) {
+        if (this.rng() < 0.25) continue;
+        const at = base.add(out.scale(k * 1.6 + 0.2)).add(along.scale(s + (this.rng() - 0.5) * 0.3));
+        const y = 0.6 * (k + 1) + 0.45;
+        const m = Matrix.RotationY(yaw + Math.PI + (this.rng() - 0.5) * 0.6).multiply(Matrix.Translation(at.x, y, at.z));
+        mats.push(...m.asArray());
+        const c = Color3.FromHexString(palette[Math.floor(this.rng() * palette.length)]);
+        cols.push(c.r, c.g, c.b, 1);
+      }
+    }
+    fanMesh.thinInstanceSetBuffer("matrix", new Float32Array(mats), 16);
+    fanMesh.thinInstanceSetBuffer("color", new Float32Array(cols), 4);
+    fanMesh.isPickable = false;
+    this.fans = fanMesh;
+    // Навес на столбах
+    const roof = MeshBuilder.CreateBox("standRoof", { width: len + 2, height: 0.3, depth: steps * 1.6 + 2 }, this.scene);
+    const rc = base.add(out.scale(((steps - 1) * 1.6) / 2));
+    roof.position.set(rc.x, 0.6 * steps + 3.4, rc.z);
+    roof.rotation.y = yaw + Math.PI / 2;
+    roof.material = photoMat(this.scene, "corrugated_iron");
+    this.register(roof, "world", false, true);
+    for (const s of [-len / 2, 0, len / 2]) {
+      const pp = base.add(out.scale(steps * 1.6)).add(along.scale(s));
+      const post = MeshBuilder.CreateBox("standPost", { width: 0.3, height: 0.6 * steps + 3.4, depth: 0.3 }, this.scene);
+      post.position.set(pp.x, (0.6 * steps + 3.4) / 2, pp.z);
+      post.material = concrete;
+      this.register(post, "world", true, true);
+    }
+    this.obstacles.push({ x0: Math.min(base.x, rc.x) - len / 2 - 4, z0: Math.min(base.z, rc.z) - 10, x1: Math.max(base.x, rc.x) + len / 2 + 4, z1: Math.max(base.z, rc.z) + 10 });
   }
 
   /** Ещё деревья по всей карте (Даниэль: «нужна природа, больше деревьев») */

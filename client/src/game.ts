@@ -36,6 +36,7 @@ import {
 import { Animal, type Prey } from "./animals";
 import { Humanoid } from "./humanoid";
 import { FallingLeaves } from "./leaves";
+import { Race, RACE_LAPS, RACE_OFFROAD_SPEED, RACE_TOP_SPEED } from "./race";
 import { Birds } from "./birds";
 import { Drone, type DroneTarget } from "./drones";
 import { Bot, type BotContext, type Target } from "./bot";
@@ -223,6 +224,8 @@ export class Game {
   private ghost: Mesh | null = null;
   fences: Fence[] = [];
   private leaves: FallingLeaves | null = null;
+  /** Уровень 5: гонка */
+  race: Race | null = null;
   /** За рулём какой машины (или null) */
   driving: { mesh: Mesh; yaw: number; home: Vector3; homeYaw: number; speed?: number } | null = null;
   private carSpeed = 0;
@@ -336,7 +339,9 @@ export class Game {
     // Команды 5 на 5: сначала враги (botCount), потом союзники — на одного меньше, ведь игрок тоже в команде
     const enemy = enemyClan(opts.clan);
     const lvl = opts.level ?? 1;
-    if (lvl === 4) {
+    if (lvl === 5) {
+      // Гонки: соперники — машины (race.ts), людей-ботов нет
+    } else if (lvl === 4) {
       // Снег: трое соперников, у каждого своё — клановое оружие или рогатка
       const ffaWeapons: WeaponId[] = ["clanWeapon", "slingshot", "clanWeapon"];
       for (let i = 0; i < 3; i++) this.bots.push(new Bot(scene, i % 2 ? opts.clan : enemy, ffaWeapons[i]));
@@ -348,6 +353,27 @@ export class Game {
     }
     // Уровень 3 — соло: союзников нет
     const allies = (opts.level ?? 1) >= 3 ? 0 : opts.botCount - 1;
+    if (lvl === 5) {
+      const game = this;
+      this.race = new Race(
+        {
+          scene,
+          effects: this.effects,
+          sfx: this.sfx,
+          now: () => game.now,
+          playerCar: () => ({ pos: game.player.position, yaw: game.player.yaw, alive: game.player.alive && game.state === "playing" }),
+          damagePlayer: (d) => game.damagePlayer(d),
+          message: (t, sec, c) => game.hud.message(t, sec, c),
+          clearLine: (a, b) => {
+            const d = b.subtract(a);
+            const len = d.length();
+            const hit = game.scene.pickWithRay(new Ray(a, d.scale(1 / len), len), (m) => isWorld(m) && !Race.racerOf(m) && !game.world.cars.some((c) => c.mesh === m), true);
+            return !hit?.hit;
+          },
+        },
+        this.world.track!,
+      );
+    }
     for (let i = 0; i < allies; i++) {
       this.bots.push(new Bot(scene, opts.clan, BOT_WEAPONS[(i + 1) % BOT_WEAPONS.length], true));
     }
@@ -701,7 +727,7 @@ export class Game {
   private updateTrader(dt: number): void {
     void dt;
     if (this.state !== "playing" && this.state !== "dead") return;
-    if (this.ffa) return;
+    if (this.ffa || this.race) return;
     if (this.now >= this.nextTraderAt) {
       this.nextTraderAt = this.now + 60;
       this.traderUntil = this.now + 30;
@@ -1087,7 +1113,7 @@ export class Game {
 
   private updateCarHint(): void {
     const trader = this.nearTrader();
-    const near = trader || !!this.driving || !!this.nearestCar();
+    const near = !this.race && (trader || !!this.driving || !!this.nearestCar());
     document.body.classList.toggle("near-car", near && this.state === "playing");
     const hint = document.getElementById("car-hint");
     if (hint) hint.textContent = trader ? (this.shopOpen ? "" : "E — торговать") : this.driving ? "E — выйти из машины" : "E — сесть в машину";
@@ -1138,7 +1164,14 @@ export class Game {
     if (throttle > 0.1) this.carSpeed += 9 * throttle * dt;
     else if (throttle < -0.1) this.carSpeed += (this.carSpeed > 0.5 ? 16 : 6) * throttle * dt;
     else this.carSpeed -= Math.sign(this.carSpeed) * Math.min(Math.abs(this.carSpeed), 3 * dt);
-    this.carSpeed = clamp(this.carSpeed, -5, 14);
+    if (this.race) {
+      // До старта стоим; вне асфальта машина вязнет
+      if (!this.race.started) this.carSpeed = 0;
+      const ri = this.race.nearestIdx(car.mesh.position, this.race.player.idx);
+      const top = this.race.offRoad(car.mesh.position, ri) ? RACE_OFFROAD_SPEED : RACE_TOP_SPEED;
+      if (this.carSpeed > top) this.carSpeed = Math.max(top, this.carSpeed - 12 * dt);
+      this.carSpeed = clamp(this.carSpeed, -5, RACE_TOP_SPEED);
+    } else this.carSpeed = clamp(this.carSpeed, -5, 14);
     // Руль: поворачивает тем сильнее, чем быстрее едем (на месте не крутится)
     const steer = input.moveX;
     const k = clamp(Math.abs(this.carSpeed) / 4, 0, 1);
@@ -1441,6 +1474,7 @@ export class Game {
     }
     for (const w of this.world.windows) if (!w.broken && Vector3.Distance(w.center, at) < R) this.shatter(w);
     for (const f of [...this.fences]) if (f.clan !== clan && Vector3.Distance(f.pos, at) < R) this.damageFence(f, 5);
+    if (this.race && clan === this.player.clan) this.kills += this.race.blast(at, R, (d) => Math.round(RULES.blastDamage * (1 - Math.min(1, d / R) * 0.67)));
     // Камера вздрагивает, если взрыв рядом
     if (vol > 0.6) this.vmKick = 1;
   }
@@ -1452,6 +1486,10 @@ export class Game {
     this.sfx.freeze(vol);
     this.effects.frost(at, R);
     const until = this.now + RULES.frostSec;
+    if (this.race && clan === this.player.clan) {
+      const n = this.race.freeze(at, R, until);
+      if (n) this.hud.message(`Заморожено машин: ${n}`, 1.4, "#9fe8ff");
+    }
     const iceMat = flatMat(this.scene, "#bfefff", 0.35);
     iceMat.alpha = 0.45;
     const encase = (pos: Vector3, h: number, r: number) => {
@@ -1522,7 +1560,7 @@ export class Game {
   private spawnAnimals(): void {
     const near = (x: number, z: number) => this.world.randomWalkPoint(this.rng, new Vector3(x, 0, z), 6);
     const place: [Animal["kind"], number, number][] =
-      this.world.level === 3
+      this.world.level === 3 || this.world.level === 5
         ? []
         : this.world.level === 2
         ? [
@@ -1616,7 +1654,8 @@ export class Game {
     // Оружие — только выбранное перед матчем (рогатку можно ещё найти в сундуке)
     this.player.owned.clear();
     // Снег: только клановое оружие и рогатка, без бомб
-    const kit = this.ffa ? (["clanWeapon", "slingshot"] as WeaponId[]) : this.loadout.weapons;
+    // Гонки: «действуют все боеприпасы» — всё оружие сразу
+    const kit = this.ffa ? (["clanWeapon", "slingshot"] as WeaponId[]) : this.race ? WEAPON_ORDER.filter((w) => w !== "sword") : this.loadout.weapons;
     for (const w of kit) this.player.owned.add(w);
     this.player.swordLevel = 1;
     this.player.humanoid.setSwordLevel(1);
@@ -1624,6 +1663,7 @@ export class Game {
     this.chargeFrom = -1;
     const lb = this.ffa ? [] : this.loadout.bombs;
     this.bombs = { weak: lb.includes("weak") ? 1 : 0, strong: 0, boom: lb.includes("boom") ? 1 : 0, frost: lb.includes("frost") ? 1 : 0 };
+    if (this.race) this.bombs = { weak: 2, strong: 1, boom: 3, frost: 2 };
     this.playerFrozenUntil = -1;
     this.res = { wood: 0, leather: 0 };
     for (const h of this.hides) h.mesh.dispose();
@@ -1687,9 +1727,35 @@ export class Game {
     this.effects.clearOrbs();
     this.hud.reset();
     this.input.reset();
+    if (this.race) {
+      this.race.reset();
+      this.enterRaceCar(this.world.track!.grid[0].pos, this.world.track!.grid[0].yaw);
+      this.matchLeft = 20 * 60;
+    }
+    document.body.classList.toggle("race", !!this.race);
+  }
+
+  /** Гонка: игрок всегда за рулём своей машины */
+  private enterRaceCar(pos: Vector3, yaw: number): void {
+    const car = this.world.cars[0];
+    car.mesh.position.set(pos.x, 0, pos.z);
+    car.yaw = yaw;
+    car.mesh.rotation.y = yaw - Math.PI / 2;
+    this.player.collider.position.set(pos.x, 0.05, pos.z);
+    this.player.yaw = yaw;
+    if (!this.driving) this.toggleCar();
+    this.carSpeed = 0;
   }
 
   private respawnPlayer(): void {
+    if (this.race) {
+      const sp = this.race.respawnPoint(this.race.player);
+      this.player.spawnAt(sp.pos, sp.yaw, this.now);
+      this.state = "playing";
+      this.playerFrozenUntil = -1;
+      this.enterRaceCar(sp.pos, sp.yaw);
+      return;
+    }
     if (this.ffa) {
       const sp = this.world.ffaSpawns[0];
       this.player.spawnAt(sp, Math.atan2(-sp.x, -sp.z), this.now);
@@ -1791,13 +1857,19 @@ export class Game {
         this.toggleShop();
         input.use = false;
       }
+      if (input.use && this.race) {
+        input.use = false;
+        this.hud.message("В гонке из машины не выходят", 1.2, "#ffb347");
+      }
       if (input.use) this.toggleCar();
       if (this.driving) this.updateCar(dt);
       else p.update(dt, input, this.now, () => this.canStand(), (x, z, y) => this.world.floorAt(x, z, y));
       this.updateCarHint();
       if (this.driving && this.building) this.setBuild(null);
       if (!this.driving) this.updateBuild(input);
-      if (this.driving) {
+      if (this.driving && this.race && p.weapon !== "sword") {
+        if (input.fire) this.tryShoot(!this.prevFire);
+      } else if (this.driving) {
         if (input.fire && !this.prevFire) this.hud.message("Из машины не стреляют — выйди (E)", 1.2, "#ffb347");
       } else if (this.building) {
         if (input.fire && !this.prevFire) this.placeBuild();
@@ -1868,7 +1940,39 @@ export class Game {
   }
 
   /** Полоска захвата для HUD: важнее всего захват своего флага */
+  private updateRace(dt: number): void {
+    const race = this.race!;
+    this.matchLeft -= dt;
+    const cd = race.countdownText();
+    if (cd) this.hud.message(cd, 0.3, "#ffe14a");
+    if (this.state === "playing" && race.updatePlayer(this.player.position)) {
+      this.endMatch(this.player.clan, `Ты первым прошёл ${RACE_LAPS} кругов!`);
+      return;
+    }
+    const bot = race.updateBots(dt);
+    if (bot) {
+      this.endMatch(enemyClan(this.player.clan), `${bot.name} первым прошёл ${RACE_LAPS} кругов`);
+      return;
+    }
+    if (race.aliveRivals() === 0) {
+      this.endMatch(this.player.clan, "Все соперники выбыли — ты победил!");
+      return;
+    }
+    if (this.matchLeft <= 0) {
+      const place = race.place(race.player);
+      if (place === 1) this.endMatch(this.player.clan, "Время вышло — ты впереди всех!");
+      else this.endMatch(enemyClan(this.player.clan), `Время вышло, ты ${place}-й`);
+    }
+  }
+
   private captureInfo(): { text: string; t: number; color: string } | null {
+    if (this.race) {
+      const r = this.race.player;
+      const lap = Math.min(RACE_LAPS, r.lap + 1);
+      const frac = (this.race.progress(r) % this.world.track!.cps.length) / this.world.track!.cps.length;
+      const total = this.race.racers.filter((x) => !x.out || x.isPlayer).length;
+      return { text: `Круг ${lap}/${RACE_LAPS} · место ${this.race.place(r)} из ${total}`, t: frac, color: "#ffe14a" };
+    }
     const mine = this.player.clan;
     const own = this.capture[mine];
     if (own.by) return { text: "Твой флаг захватывают!", t: own.t, color: "#ff5a4a" };
@@ -2053,6 +2157,14 @@ export class Game {
       }
       if (glassHit && !beast && !target) this.shatter(glassHit);
       if (!beast && !target && wHit?.hit) this.hitFenceFrom(wHit.pickedMesh);
+      const racer = !beast && !target && wHit?.hit ? Race.racerOf(wHit.pickedMesh) : null;
+      if (racer && this.race) {
+        const killed = this.race.damage(racer, WEAPONS[p.weapon].damage);
+        this.hud.hit(killed);
+        this.effects.impact(end, true);
+        if (killed) this.kills++;
+        return;
+      }
       if (p.weapon === "sticky") {
         if (beast && beast.alive) this.stick(beast.pos, () => (beast.stuckUntil = this.now + STICKY.stuckSec), beast.info.radius + 0.3, beast.info.name);
         else if (target && target.alive) {
@@ -2133,6 +2245,10 @@ export class Game {
   }
 
   private updateMatch(dt: number): void {
+    if (this.race) {
+      this.updateRace(dt);
+      return;
+    }
     // Время
     this.matchLeft -= dt;
     if (this.matchLeft <= 0) {
@@ -2385,7 +2501,8 @@ export class Game {
       if (p.lives <= 0) {
         p.humanoid.deathT = 1;
         p.humanoid.animate(0, 0, false, 0, false);
-        if (this.ffa) this.endMatch(enemyClan(p.clan), "Ты замёрз и выбыл. В снегах остались другие");
+        if (this.race) this.endMatch(enemyClan(p.clan), "Твою машину разбили три раза — ты выбыл из гонки");
+        else if (this.ffa) this.endMatch(enemyClan(p.clan), "Ты замёрз и выбыл. В снегах остались другие");
         else if (this.clanOut(p.clan)) this.endMatch(enemyClan(p.clan), `Все ${CLANS[p.clan].name} выбыли`);
         else this.endMatch(null, "Ты потратил все три жизни");
       } else {

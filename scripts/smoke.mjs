@@ -1002,6 +1002,66 @@ const browser = await chromium.launch({
   await ctx.close();
 }
 
+// ---------- Уровень 5: гонки ----------
+{
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  const page = await ctx.newPage();
+  watch(page, "level5");
+  await page.goto(URL + "?test&level=5", { waitUntil: "load" });
+  await page.click("#play");
+  await page.waitForFunction(() => !!window.__game, null, { timeout: 180000 });
+  const l5 = await page.evaluate(async () => {
+    const g = window.__game;
+    const p = g.player;
+    const race = g.race;
+    const frames = async (n) => {
+      const u = g.engine.frameId + n;
+      while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
+    };
+    const driving0 = !!g.driving;
+    const locked = !race.started;
+    // Старт: боты поехали
+    race.startAt = g.now;
+    const prog0 = race.racers.slice(1).map((r) => race.progress(r));
+    await frames(60);
+    const moved = race.racers.slice(1).every((r, i) => race.progress(r) > prog0[i]);
+    // Выстрел по сопернику: машина ломается после урона
+    const rival = race.racers[1];
+    const hp0 = rival.hp;
+    race.damage(rival, 30);
+    const hurt = hp0 - rival.hp;
+    race.damage(rival, 999);
+    const wrecked = !rival.mesh.isEnabled() && rival.lives === 2;
+    // Машину игрока разбили — возвращается за руль у контрольной точки
+    p.invulnerableUntil = 0;
+    g["damagePlayer"](999);
+    const deadState = g.state;
+    for (let i = 0; i < 60 && g.state !== "playing"; i++) await frames(5);
+    const backInCar = g.state === "playing" && !!g.driving && p.lives === 2;
+    // Круги: проезжаем все контрольные точки 10 раз — победа
+    let result = null;
+    const orig = g.onGameOver;
+    g.onGameOver = (r) => (result = r);
+    for (const r of race.racers.slice(1)) r.skill = 0; // соперники стоят
+    const t = g.world.track;
+    for (let lap = 0; lap < 10 && !result; lap++) {
+      for (let k = 1; k <= t.cps.length && !result; k++) {
+        const pt = t.pts[t.cps[k % t.cps.length]];
+        g.driving.mesh.position.set(pt.x, 0, pt.z);
+        p.collider.position.set(pt.x, 0.05, pt.z);
+        await frames(1);
+      }
+    }
+    g.onGameOver = orig;
+    return { level: g.world.level, driving0, locked, moved, hurt, wrecked, deadState, backInCar, laps: race.player.lap, won: result?.won, reason: result?.reason, bots: g.bots.length };
+  });
+  console.log("level 5:", l5);
+  if (l5.level !== 5 || !l5.driving0 || !l5.locked || !l5.moved || l5.hurt !== 30 || !l5.wrecked || l5.deadState !== "dead" || !l5.backInCar || l5.laps !== 10 || !l5.won || l5.bots !== 0)
+    errors.push("[level5] гонки работают не так");
+  await page.screenshot({ path: path.join(shots, "11-level5-race.png") });
+  await ctx.close();
+}
+
 await browser.close();
 console.log("\nconsole/page errors:", errors.length ? errors : "none");
 process.exit(errors.length ? 1 : 0);

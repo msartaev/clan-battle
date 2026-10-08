@@ -1134,3 +1134,8 @@ body.building #btn-fire {
 body.building #btn-fire::after {
   font-size: 16px;
 }
+
+/* Гонки: счёт кланов не нужен — вместо него круг и место */
+body.race #teams {
+  display: none;
+}
