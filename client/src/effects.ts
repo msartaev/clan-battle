@@ -147,6 +147,28 @@ export class Effects {
     this.tracers.push({ mesh, life: 0.07 });
   }
 
+  private laserMats = new Map<string, StandardMaterial>();
+  /** Лазерный луч (пушки на машинах в гонке): толстый светящийся луч на всю длину */
+  laserBeam(from: Vector3, to: Vector3, hex = "#ff3b2f"): void {
+    let mat = this.laserMats.get(hex);
+    if (!mat) {
+      mat = glowMat(this.scene, `laser_${hex}`, hex);
+      this.laserMats.set(hex, mat);
+    }
+    let mesh = this.freeTracers.pop();
+    if (!mesh) {
+      mesh = MeshBuilder.CreateBox("tracer", { width: 0.025, height: 0.025, depth: 1 }, this.scene);
+      mesh.isPickable = false;
+    }
+    mesh.material = mat;
+    mesh.setEnabled(true);
+    const len = Math.max(0.1, Vector3.Distance(from, to));
+    mesh.position.copyFrom(Vector3.Center(from, to));
+    mesh.scaling.set(3.2, 3.2, len);
+    mesh.lookAt(to);
+    this.tracers.push({ mesh, life: 0.12 });
+  }
+
   muzzleFlash(pos: Vector3): void {
     this.flash.position.copyFrom(pos);
     this.flash.setEnabled(true);

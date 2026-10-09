@@ -1,4 +1,5 @@
 import { showCats } from "./cats";
+import { Shell } from "./shell";
 import "./style.css";
 import type { ClanId, WeaponId } from "@clan-battle/shared";
 import { CLANS } from "@clan-battle/shared";
@@ -44,9 +45,28 @@ const clanButtons = Array.from(document.querySelectorAll<HTMLButtonElement>(".cl
 function selectClan(c: ClanId): void {
   clan = c;
   clanButtons.forEach((b) => b.classList.toggle("selected", b.dataset.clan === c));
+  document.documentElement.style.setProperty("--clan", CLANS[c].color);
+  document.documentElement.style.setProperty("--clan-accent", CLANS[c].accent);
 }
 clanButtons.forEach((b) => b.addEventListener("click", () => selectClan(b.dataset.clan as ClanId)));
 selectClan(clan);
+
+// ----- Приложение: можно поставить на телефон, работает и без сети после первого запуска -----
+if (!testMode && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(() => undefined));
+}
+
+// ----- Заставка и главный экран (в тестах сразу стартовый экран) -----
+const shell = new Shell({ getClan: () => clan, setClan: (c) => selectClan(c), onPlay: () => showScreen("start") });
+if (testMode) document.body.classList.add("test-mode");
+else {
+  showScreen(null);
+  shell.splash();
+}
+$("start-back").addEventListener("click", () => {
+  showScreen(null);
+  shell.home();
+});
 
 // ----- Уровни: 1–4 открыты сразу; следующие — когда выиграны все четыре (идея Даниэля) -----
 const FREE_LEVELS = 4;

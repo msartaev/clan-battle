@@ -2,7 +2,9 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="data:," />
+    <link rel="icon" href="./icon-192.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
@@ -10,14 +12,102 @@
     <meta name="theme-color" content="#1b2433" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Битва кланов" />
     <title>Битва кланов</title>
   </head>
   <body>
     <canvas id="game" touch-action="none"></canvas>
 
+    <!-- Заставка: по экрану медленно проходит меч -->
+    <section id="splash" class="screen hidden">
+      <div class="splash-title">Битва кланов</div>
+      <div class="splash-sword">
+        <svg viewBox="0 0 300 60" aria-hidden="true">
+          <defs>
+            <linearGradient id="blade" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#ffffff" />
+              <stop offset="0.5" stop-color="#cfd8e0" />
+              <stop offset="1" stop-color="#8a96a3" />
+            </linearGradient>
+          </defs>
+          <path d="M70 24 L270 24 L296 30 L270 36 L70 36 Z" fill="url(#blade)" stroke="#5d6b78" stroke-width="2" />
+          <rect x="58" y="8" width="12" height="44" rx="4" fill="#c9a227" stroke="#7a5f10" stroke-width="2" />
+          <rect x="8" y="24" width="50" height="12" rx="5" fill="#6b3f1f" />
+          <circle cx="8" cy="30" r="9" fill="#c9a227" stroke="#7a5f10" stroke-width="2" />
+        </svg>
+      </div>
+      <div class="splash-bar"><i></i></div>
+    </section>
+
+    <!-- Главный экран -->
+    <section id="home" class="screen hidden">
+      <div class="home-top">
+        <div class="home-title">Битва кланов</div>
+        <button id="home-draw" class="home-corner">🎨 Нарисовать персонажа</button>
+      </div>
+      <div class="home-center">
+        <div class="home-clan">
+          <button class="clan-arrow" data-dir="-1">‹</button>
+          <span id="home-clan-name">Драконы</span>
+          <button class="clan-arrow" data-dir="1">›</button>
+        </div>
+        <canvas id="home-avatar"></canvas>
+      </div>
+      <div class="home-bottom">
+        <button id="home-connect" class="home-side">👥 Подсоединиться</button>
+        <button id="home-play" class="big">Play</button>
+        <span class="home-side-spacer"></span>
+      </div>
+    </section>
+
+    <!-- Рисовалка персонажа -->
+    <section id="editor" class="screen hidden">
+      <div class="ed-card">
+        <div class="ed-head">
+          <button id="ed-back" class="link">‹ Назад</button>
+          <div class="ed-modes">
+            <button data-mode="square" class="selected">⬛ Квадратный</button>
+            <button data-mode="round">⚪ Круглый</button>
+          </div>
+          <button id="ed-save" class="ed-done">Готово</button>
+        </div>
+        <div class="ed-body">
+          <div class="ed-left">
+            <canvas id="ed-grid"></canvas>
+            <div class="ed-tools">
+              <label><input type="checkbox" id="ed-mirror" checked /> Зеркально</label>
+              <button id="ed-clear">Очистить</button>
+              <button id="ed-reset">Человечек</button>
+            </div>
+          </div>
+          <div class="ed-right">
+            <div id="ed-palette"></div>
+            <canvas id="ed-preview"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Игра с друзьями -->
+    <section id="connect" class="screen hidden">
+      <div class="start-card">
+        <h2>👥 Подсоединиться</h2>
+        <p>Здесь можно будет позвать друзей и играть вместе: один создаёт комнату, остальные вводят её код.</p>
+        <div class="connect-row">
+          <button disabled>Создать комнату</button>
+          <input placeholder="Код комнаты" disabled />
+          <button disabled>Войти</button>
+        </div>
+        <p class="sub">Скоро! Для игры с друзьями нужен игровой сервер — его подключим следующим шагом.</p>
+        <button id="connect-back" class="big">Назад</button>
+      </div>
+    </section>
+
     <!-- Стартовый экран -->
     <section id="start" class="screen">
       <div class="start-card">
+        <button id="start-back" class="link back-home">‹ Главный экран</button>
         <h1>Битва кланов</h1>
         <p class="sub">Выбери свой клан</p>
         <div class="clans">

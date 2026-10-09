@@ -1019,6 +1019,7 @@ const browser = await chromium.launch({
       while (g.engine.frameId < u) await new Promise((r) => setTimeout(r, 20));
     };
     const driving0 = !!g.driving;
+    const turrets = race.racers.filter((r) => r.turret).length;
     const locked = !race.started;
     // Старт: боты поехали
     race.startAt = g.now;
@@ -1053,10 +1054,10 @@ const browser = await chromium.launch({
       }
     }
     g.onGameOver = orig;
-    return { level: g.world.level, driving0, locked, moved, hurt, wrecked, deadState, backInCar, laps: race.player.lap, won: result?.won, reason: result?.reason, bots: g.bots.length };
+    return { level: g.world.level, turrets, driving0, locked, moved, hurt, wrecked, deadState, backInCar, laps: race.player.lap, won: result?.won, reason: result?.reason, bots: g.bots.length };
   });
   console.log("level 5:", l5);
-  if (l5.level !== 5 || !l5.driving0 || !l5.locked || !l5.moved || l5.hurt !== 30 || !l5.wrecked || l5.deadState !== "dead" || !l5.backInCar || l5.laps !== 10 || !l5.won || l5.bots !== 0)
+  if (l5.level !== 5 || l5.turrets !== 4 || !l5.driving0 || !l5.locked || !l5.moved || l5.hurt !== 30 || !l5.wrecked || l5.deadState !== "dead" || !l5.backInCar || l5.laps !== 10 || !l5.won || l5.bots !== 0)
     errors.push("[level5] гонки работают не так");
   await page.screenshot({ path: path.join(shots, "11-level5-race.png") });
   await ctx.close();
@@ -1106,7 +1107,7 @@ const browser = await chromium.launch({
     return { owned0, bots, enemyClan, tractors, kit, won: result?.won, reason: result?.reason };
   });
   console.log("level 6:", l6);
-  if (l6.owned0 !== 0 || l6.bots !== 1 || !l6.enemyClan || l6.tractors < 4 || l6.kit !== "clanWeapon,slingshot,strongPistol" || !l6.won || !/Трактор/.test(l6.reason ?? ""))
+  if (l6.owned0 !== 0 || l6.bots !== 1 || !l6.enemyClan || l6.tractors < 4 || l6.kit !== "clanWeapon,slingshot,sticky,strongPistol,sword,weakPistol" || !l6.won || !/Трактор/.test(l6.reason ?? ""))
     errors.push("[level6] ферма работает не так");
   await page.screenshot({ path: path.join(shots, "12-level6-farm.png") });
   await ctx.close();

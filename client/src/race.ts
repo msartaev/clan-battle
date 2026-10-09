@@ -1,4 +1,4 @@
-import { Mesh, Scene, Vector3, type AbstractMesh } from "@babylonjs/core";
+import { Color3, Mesh, MeshBuilder, Scene, StandardMaterial, TransformNode, Vector3, type AbstractMesh } from "@babylonjs/core";
 import { buildCarMesh, type CarKind } from "./cars";
 import type { Effects, Sfx } from "./effects";
 import { clamp } from "./utils";
@@ -40,6 +40,8 @@ export interface Racer {
   skill: number;
   /** Свой ряд на трассе, чтобы боты не ехали гуськом */
   lane: number;
+  /** Лазерная пушка на крыше («рука», как придумал Даниэль) */
+  turret: TransformNode | null;
   laneUntil: number;
 }
 
@@ -49,7 +51,7 @@ export interface RaceHost {
   sfx: Sfx;
   now(): number;
   /** Позиция и курс машины игрока */
-  playerCar(): { pos: Vector3; yaw: number; alive: boolean };
+  playerCar(): { pos: Vector3; yaw: number; alive: boolean; mesh: Mesh };
   damagePlayer(dmg: number): void;
   message(text: string, sec: number, color: string): void;
   /** Видно ли из точки в точку (нет стен) */
@@ -85,12 +87,53 @@ export class Race {
         c.isPickable = true;
         c.metadata = { kind: "world", racer: r };
       }
+      r.turret = Race.addTurret(host.scene, mesh, "#3a3f46");
       this.racers.push(r);
     });
+    this.player.turret = Race.addTurret(host.scene, host.playerCar().mesh, "#2b2f35");
+  }
+
+  /** Пушка на крышу: поворотная башенка со стволом и красным огоньком */
+  static addTurret(scene: Scene, car: Mesh, hex: string): TransformNode {
+    car.computeWorldMatrix(true);
+    const top = car.getBoundingInfo().boundingBox.maximum.y;
+    const root = new TransformNode(`turret_${car.name}`, scene);
+    root.parent = car;
+    root.position.set(-0.3, top - 0.02, 0);
+    const mat = new StandardMaterial(`turretMat_${car.name}`, scene);
+    mat.diffuseColor = Color3.FromHexString(hex);
+    mat.specularColor.set(0.5, 0.5, 0.5);
+    const base = MeshBuilder.CreateCylinder("turretBase", { diameter: 0.7, height: 0.25, tessellation: 14 }, scene);
+    base.position.y = 0.12;
+    base.material = mat;
+    base.parent = root;
+    const barrel = MeshBuilder.CreateCylinder("turretBarrel", { diameter: 0.14, height: 1.1, tessellation: 8 }, scene);
+    barrel.rotation.z = -Math.PI / 2;
+    barrel.position.set(0.55, 0.3, 0);
+    barrel.material = mat;
+    barrel.parent = root;
+    const tip = MeshBuilder.CreateSphere("turretTip", { diameter: 0.18, segments: 6 }, scene);
+    tip.position.set(1.1, 0.3, 0);
+    const glow = new StandardMaterial(`turretGlow_${car.name}`, scene);
+    glow.emissiveColor = new Color3(1, 0.2, 0.15);
+    glow.disableLighting = true;
+    tip.material = glow;
+    tip.parent = root;
+    for (const m of root.getChildMeshes()) m.isPickable = false;
+    return root;
+  }
+
+  /** Повернуть пушку на мировой курс yaw; вернуть точку дула */
+  static aimTurret(t: TransformNode, carYaw: number, yaw: number): Vector3 {
+    // Машина повёрнута на carYaw - π/2, пушка смотрит вдоль локального +x
+    t.rotation.y = yaw - carYaw;
+    t.computeWorldMatrix(true);
+    const fwd = new Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+    return t.getAbsolutePosition().add(new Vector3(0, 0.3, 0)).add(fwd.scale(1.15));
   }
 
   private makeRacer(name: string, isPlayer: boolean, mesh: Mesh | null): Racer {
-    return { name, isPlayer, mesh, yaw: 0, speed: 0, hp: 100, lives: 3, lap: 0, cp: 1, idx: 0, deadUntil: 0, out: false, nextShotAt: 0, frozenUntil: 0, skill: 1, lane: 0, laneUntil: 0 };
+    return { name, isPlayer, mesh, yaw: 0, speed: 0, hp: 100, lives: 3, lap: 0, cp: 1, idx: 0, deadUntil: 0, out: false, nextShotAt: 0, frozenUntil: 0, skill: 1, lane: 0, laneUntil: 0, turret: null };
   }
 
   /** Все на старт: машины в пещере, отсчёт 3-2-1 */
@@ -329,7 +372,7 @@ export class Race {
       // Стрельба: в машину впереди (игрока или другого бота)
       if (now >= r.nextShotAt) {
         r.nextShotAt = now + 1.4 + Math.random() * 1.6;
-        const from = mesh.position.add(new Vector3(0, 1.3, 0));
+        let from = mesh.position.add(new Vector3(0, 1.8, 0));
         const targets: { pos: Vector3; hit: () => void }[] = [];
         if (pc.alive) targets.push({ pos: pc.pos, hit: () => this.host.damagePlayer(7) });
         for (const o of this.racers) {
@@ -343,10 +386,11 @@ export class Race {
           if ((to.x * fwd.x + to.z * fwd.z) / d < 0.75) continue;
           const end = t.pos.add(new Vector3(0, 1, 0));
           if (!this.host.clearLine(from, end)) continue;
+          if (r.turret) from = Race.aimTurret(r.turret, r.yaw, Math.atan2(to.x, to.z));
           const vol = clamp(1 - Vector3.Distance(mesh.position, pc.pos) / 60, 0.1, 0.8);
-          this.host.sfx.shot("strongPistol", vol);
+          this.host.sfx.laser(vol);
           const hit = Math.random() < 0.5;
-          this.host.effects.tracer(from, hit ? end : end.add(new Vector3(Math.random() * 2 - 1, Math.random(), Math.random() * 2 - 1)), true);
+          this.host.effects.laserBeam(from, hit ? end : end.add(new Vector3(Math.random() * 2 - 1, Math.random(), Math.random() * 2 - 1)));
           if (hit) t.hit();
           break;
         }

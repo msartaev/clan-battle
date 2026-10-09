@@ -119,10 +119,10 @@ interface Fence {
   hitAt: Map<object, number>;
   kind: "fenceWeak" | "fenceStrong";
 }
-/** Электрозаборы (Даниэль): слабый бьёт током на 10, сильный — на 20 */
+/** Электрозаборы (Даниэль): слабый бьёт током на 10 и выдерживает 5 ударов, сильный — 20 и 10 ударов */
 const FENCE = {
-  fenceWeak: { name: "Слабый электрозабор", icon: "⚡", zap: 10, hp: 10, wood: 6, leather: 1 },
-  fenceStrong: { name: "Сильный электрозабор", icon: "⚡⚡", zap: 20, hp: 20, wood: 20, leather: 4 },
+  fenceWeak: { name: "Слабый электрозабор", icon: "⚡", zap: 10, hp: 5, wood: 6, leather: 1 },
+  fenceStrong: { name: "Сильный электрозабор", icon: "⚡⚡", zap: 20, hp: 10, wood: 20, leather: 4 },
 } as const;
 
 export class Game {
@@ -263,6 +263,8 @@ export class Game {
   bombs = { weak: 1, strong: 0, boom: 1, frost: 1, grenade: 0, push: 0 };
   /** Уровень 7: сколько раз лечился бомбой — каждое лечение «стоит» дороже */
   private healUses = 0;
+  /** Сколько здоровья лечебная бомба ещё вернёт */
+  private healBack = 0;
   private dotTick = 0;
   /** Летящие боевые бомбы */
   private thrown: { mesh: Mesh; pos: Vector3; vel: Vector3; kind: CombatBomb; clan: ClanId }[] = [];
@@ -392,7 +394,7 @@ export class Game {
           effects: this.effects,
           sfx: this.sfx,
           now: () => game.now,
-          playerCar: () => ({ pos: game.player.position, yaw: game.player.yaw, alive: game.player.alive && game.state === "playing" }),
+          playerCar: () => ({ pos: game.player.position, yaw: game.player.yaw, alive: game.player.alive && game.state === "playing", mesh: game.world.cars[0].mesh }),
           damagePlayer: (d) => game.damagePlayer(d),
           message: (t, sec, c) => game.hud.message(t, sec, c),
           clearLine: (a, b) => {
@@ -1175,17 +1177,17 @@ export class Game {
     return null;
   }
 
-  /** Открыть сундук: внутри клановое оружие, рогатка и сильный пистолет */
+  /** Открыть сундук: внутри всё оружие (Даниэль: «вообще все нужны») */
   private openWeaponChest(c: (typeof this.world.weaponChests)[number]): void {
     c.open = true;
     (c.lid.parent as TransformNode).rotation.x = 0;
     c.lid.rotation.x = -1.9;
     const p = this.player;
-    for (const w of ["clanWeapon", "slingshot", "strongPistol"] as WeaponId[]) p.owned.add(w);
+    for (const w of WEAPON_ORDER) p.owned.add(w);
     p.selectWeapon(WEAPON_ORDER.indexOf("clanWeapon"));
     p.ammo = RULES.maxAmmo;
     this.sfx.pickup();
-    this.hud.message("Сундук открыт: клановое оружие, рогатка и сильный пистолет!", 2.2, "#ffe14a");
+    this.hud.message("Сундук открыт: всё оружие твоё!", 2.2, "#ffe14a");
   }
 
   // ---------------- Машины ----------------
@@ -1424,9 +1426,11 @@ export class Game {
       const cost = 2 * this.healUses;
       const p = this.player;
       p.hp = Math.max(1, RULES.maxHp - cost);
+      // …и потом понемногу возвращает забранное
+      this.healBack += cost;
       this.effects.frost(p.position.clone(), 1.5);
       this.sfx.pickup();
-      this.hud.message(`Вылечен! Плата за лечение: −${cost} (следующее −${cost + 2})`, 2, "#7dffb0");
+      this.hud.message(`Вылечен! Бомба взяла ${cost} — вернёт их за пару секунд`, 2, "#7dffb0");
       return;
     }
     this.bombs[k]--;
@@ -1503,6 +1507,11 @@ export class Game {
     }
     this.bombs[k]--;
     const p = this.player;
+    // Легендарный: взрывная бомба забирает 2 здоровья и у того, кто бросил
+    if (this.legend && k === "boom") {
+      p.hp = Math.max(1, p.hp - 2);
+      this.hud.damage();
+    }
     // Бросок по дуге из руки по направлению взгляда (чуть вверх)
     const dir = dirFromYawPitch(p.yaw, p.pitch - 0.25);
     const pos = p.position.add(new Vector3(0, p.eyeHeight - 0.2, 0)).add(dir.scale(0.6));
@@ -1549,6 +1558,7 @@ export class Game {
 
   /** Бот бросает бомбу по дуге точно в цель (гравитация как у броска игрока) */
   private botThrow(b: Bot, kind: CombatBomb, t: Target): void {
+    if (this.legend && kind === "boom") b.hp = Math.max(1, b.hp - 2);
     const from = b.humanoid.getMuzzlePosition();
     const to = t.pos.add(new Vector3(0, 0.3, 0));
     const d = to.subtract(from);
@@ -1603,6 +1613,12 @@ export class Game {
 
   /** Легендарный: лёд ещё и жжёт — по 1 урону в секунду, пока стоишь замороженным */
   private updateFrostBurn(dt: number): void {
+    // Лечебная бомба возвращает забранное: по 2 здоровья в секунду
+    if (this.healBack > 0 && this.player.alive) {
+      const add = Math.min(this.healBack, 2 * dt);
+      this.healBack -= add;
+      this.player.hp = Math.min(RULES.maxHp, this.player.hp + add);
+    }
     this.dotTick += dt;
     if (this.dotTick < 1) return;
     this.dotTick -= 1;
@@ -1832,6 +1848,7 @@ export class Game {
     // Ферма — без всего; легендарный — бомбы только из сундуков
     if (this.world.level === 6 || this.legend) this.bombs = { weak: 0, strong: 0, boom: 0, frost: 0, grenade: 0, push: 0 };
     this.healUses = 0;
+    this.healBack = 0;
     for (const c of this.world.weaponChests) {
       c.open = false;
       (c.lid.parent as TransformNode).rotation.x = 0;
@@ -2051,8 +2068,8 @@ export class Game {
       this.updateCarHint();
       if (this.driving && this.building) this.setBuild(null);
       if (!this.driving) this.updateBuild(input);
-      if (this.driving && this.race && p.weapon !== "sword") {
-        if (input.fire) this.tryShoot(!this.prevFire);
+      if (this.driving && this.race) {
+        this.raceLaser(input.fire);
       } else if (this.driving) {
         if (input.fire && !this.prevFire) this.hud.message("Из машины не стреляют — выйди (E)", 1.2, "#ffb347");
       } else if (this.building) {
@@ -2128,6 +2145,32 @@ export class Game {
   }
 
   /** Полоска захвата для HUD: важнее всего захват своего флага */
+  private nextLaserAt = 0;
+
+  /** Гонка: стреляем из лазерной пушки на крыше — туда, куда смотрит камера */
+  private raceLaser(fire: boolean): void {
+    const race = this.race!;
+    const car = this.driving!;
+    const p = this.player;
+    const turret = race.player.turret;
+    const muzzle = turret ? Race.aimTurret(turret, car.yaw, p.yaw) : car.mesh.position.add(new Vector3(0, 1.8, 0));
+    if (!fire || this.now < this.nextLaserAt) return;
+    this.nextLaserAt = this.now + 0.25;
+    const dir = dirFromYawPitch(p.yaw, p.pitch);
+    const origin = this.camera.position.clone();
+    const hit = this.scene.pickWithRay(new Ray(origin, dir, 120), (m) => isSolid(m) && m !== car.mesh, false);
+    const end = hit?.hit && hit.pickedPoint ? hit.pickedPoint.clone() : origin.add(dir.scale(120));
+    this.effects.laserBeam(muzzle, end, "#3bd8ff");
+    this.sfx.laser(0.8);
+    const racer = hit?.hit ? Race.racerOf(hit.pickedMesh) : null;
+    if (racer) {
+      const killed = race.damage(racer, 9);
+      this.hud.hit(killed);
+      this.effects.impact(end, true);
+      if (killed) this.kills++;
+    } else if (hit?.hit) this.effects.impact(end, false);
+  }
+
   private updateRace(dt: number): void {
     const race = this.race!;
     this.matchLeft -= dt;
